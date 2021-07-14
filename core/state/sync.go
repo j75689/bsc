@@ -47,6 +47,7 @@ func NewStateSync(root common.Hash, database ethdb.KeyValueReader, bloom *trie.S
 		if err := rlp.Decode(bytes.NewReader(leaf), &obj); err != nil {
 			return err
 		}
+		// fmt.Println("syncer.AddSubTrie(obj.Root, hexpath, parent, onSlot)", "root", obj.Root.Hex(), "parent", parent.Hex())
 		syncer.AddSubTrie(obj.Root, hexpath, parent, onSlot)
 		syncer.AddCodeEntry(common.BytesToHash(obj.CodeHash), hexpath, parent)
 		return nil

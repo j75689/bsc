@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"math/big"
 	"math/rand"
+	"runtime"
 	"sort"
 	"sync"
 	"time"
@@ -40,6 +41,7 @@ import (
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
 	"golang.org/x/crypto/sha3"
+	"golang.org/x/sync/errgroup"
 )
 
 var (
@@ -74,7 +76,7 @@ const (
 	// a single query. If this number is too low, we're not filling responses fully
 	// and waste round trip times. If it's too high, we're capping responses and
 	// waste bandwidth.
-	maxTrieRequestCount = 256
+	maxTrieRequestCount = 1024
 )
 
 var (
@@ -230,7 +232,8 @@ type trienodeHealRequest struct {
 	hashes []common.Hash   // Trie node hashes to validate responses
 	paths  []trie.SyncPath // Trie node paths requested for rescheduling
 
-	task *healTask // Task which this request is filling (only access fields through the runloop!!)
+	task     *healTask // Task which this request is filling (only access fields through the runloop!!)
+	sendTime time.Time
 }
 
 // trienodeHealResponse is an already verified remote response to a trie node request.
@@ -313,12 +316,88 @@ type storageTask struct {
 	done bool // Flag whether the task can be removed
 }
 
+type healTaskObj struct {
+	hash common.Hash
+	path trie.SyncPath
+}
+
 // healTask represents the sync task for healing the snap-synced chunk boundaries.
 type healTask struct {
-	scheduler *trie.Sync // State trie sync scheduler defining the tasks
+	scheduler     *trie.Sync // State trie sync scheduler defining the tasks
+	knownStates   uint64
+	pulledStates  uint64
+	trieTasksLock sync.RWMutex
+	trieTasks     map[common.Hash]trie.SyncPath // Set of trie node tasks currently queued for retrieval
+	trieTasksChan chan *healTaskObj
+	codeTasksLock sync.RWMutex
+	codeTasks     map[common.Hash]struct{} // Set of byte code tasks currently queued for retrieval
+	codeTasksChan chan *healTaskObj
+}
 
-	trieTasks map[common.Hash]trie.SyncPath // Set of trie node tasks currently queued for retrieval
-	codeTasks map[common.Hash]struct{}      // Set of byte code tasks currently queued for retrieval
+func (heal *healTask) DeleteTrieTask(key common.Hash) {
+	heal.trieTasksLock.Lock()
+	defer heal.trieTasksLock.Unlock()
+	delete(heal.trieTasks, key)
+}
+
+func (heal *healTask) SetTrieTask(key common.Hash, value trie.SyncPath) {
+	heal.trieTasksLock.Lock()
+	defer heal.trieTasksLock.Unlock()
+	heal.trieTasks[key] = value
+}
+
+func (heal *healTask) GetTrieTask(key common.Hash) (trie.SyncPath, bool) {
+	heal.trieTasksLock.RLock()
+	defer heal.trieTasksLock.RUnlock()
+	v, ok := heal.trieTasks[key]
+	return v, ok
+}
+
+func (heal *healTask) LenTrieTask() int {
+	heal.trieTasksLock.RLock()
+	defer heal.trieTasksLock.RUnlock()
+	return len(heal.trieTasks)
+}
+
+func (heal *healTask) RangeTrieTask(callback func(k common.Hash, v trie.SyncPath) bool) {
+	heal.trieTasksLock.Lock()
+	defer heal.trieTasksLock.Unlock()
+	for k, v := range heal.trieTasks {
+		delete(heal.trieTasks, k)
+		if callback(k, v) {
+			break
+		}
+	}
+}
+
+func (heal *healTask) SetCodeTask(key common.Hash, value struct{}) {
+	heal.codeTasksLock.Lock()
+	defer heal.codeTasksLock.Unlock()
+	heal.codeTasks[key] = value
+}
+
+func (heal *healTask) GetCodeTask(key common.Hash) (struct{}, bool) {
+	heal.codeTasksLock.RLock()
+	defer heal.codeTasksLock.RUnlock()
+	v, ok := heal.codeTasks[key]
+	return v, ok
+}
+
+func (heal *healTask) LenCodeTask() int {
+	heal.codeTasksLock.RLock()
+	defer heal.codeTasksLock.RUnlock()
+	return len(heal.codeTasks)
+}
+
+func (heal *healTask) RangeCodeTask(callback func(k common.Hash, v struct{}) bool) {
+	heal.codeTasksLock.Lock()
+	defer heal.codeTasksLock.Unlock()
+	for k, v := range heal.codeTasks {
+		delete(heal.codeTasks, k)
+		if callback(k, v) {
+			break
+		}
+	}
 }
 
 // syncProgress is a database entry to allow suspending and resuming a snapshot state
@@ -529,15 +608,17 @@ func (s *Syncer) Unregister(id string) error {
 // with the given root and reconstruct the nodes based on the snapshot leaves.
 // Previously downloaded segments will not be redownloaded of fixed, rather any
 // errors will be healed after the leaves are fully accumulated.
-func (s *Syncer) Sync(root common.Hash, cancel chan struct{}) error {
+func (s *Syncer) Sync(root common.Hash, cancel chan struct{}, bloom *trie.SyncBloom) error {
 	// Move the trie root from any previous value, revert stateless markers for
 	// any peers and initialize the syncer if it was not yet run
 	s.lock.Lock()
 	s.root = root
 	s.healer = &healTask{
-		scheduler: state.NewStateSync(root, s.db, nil, s.onHealState),
-		trieTasks: make(map[common.Hash]trie.SyncPath),
-		codeTasks: make(map[common.Hash]struct{}),
+		scheduler:     state.NewStateSync(root, s.db, bloom, s.onHealState),
+		trieTasks:     make(map[common.Hash]trie.SyncPath),
+		trieTasksChan: make(chan *healTaskObj, maxTrieRequestCount),
+		codeTasks:     make(map[common.Hash]struct{}),
+		codeTasksChan: make(chan *healTaskObj, maxCodeRequestCount),
 	}
 	s.statelessPeers = make(map[string]struct{})
 	s.lock.Unlock()
@@ -545,8 +626,11 @@ func (s *Syncer) Sync(root common.Hash, cancel chan struct{}) error {
 	if s.startTime == (time.Time{}) {
 		s.startTime = time.Now()
 	}
+
 	// Retrieve the previous sync status from LevelDB and abort if already synced
 	s.loadSyncStatus()
+	fmt.Println("Restart Snap Sync, time:", time.Now(), "pending:", s.healer.scheduler.Pending(), "new root:", root.String())
+
 	if len(s.tasks) == 0 && s.healer.scheduler.Pending() == 0 {
 		log.Debug("Snapshot sync already completed")
 		return nil
@@ -605,59 +689,121 @@ func (s *Syncer) Sync(root common.Hash, cancel chan struct{}) error {
 		trienodeHealResps    = make(chan *trienodeHealResponse)
 		bytecodeHealResps    = make(chan *bytecodeHealResponse)
 	)
-	for {
-		// Remove all completed tasks and terminate sync if everything's done
-		s.cleanStorageTasks()
-		s.cleanAccountTasks()
-		if len(s.tasks) == 0 && s.healer.scheduler.Pending() == 0 {
-			return nil
-		}
-		// Assign all the data retrieval tasks to any free peers
-		s.assignAccountTasks(accountResps, accountReqFails, cancel)
-		s.assignBytecodeTasks(bytecodeResps, bytecodeReqFails, cancel)
-		s.assignStorageTasks(storageResps, storageReqFails, cancel)
 
-		if len(s.tasks) == 0 {
+	errg := errgroup.Group{}
+	startHeal := make(chan struct{})
+
+	errg.Go(func() error {
+		<-startHeal
+		fmt.Println("Start Heallllllll Reciver")
+		go s.fillHealTasks(trienodeHealResps, cancel)
+		go s.assignTrienodeHealTasks(trienodeHealResps, trienodeHealReqFails, cancel)
+		go s.assignTrienodeHealTasks(trienodeHealResps, trienodeHealReqFails, cancel)
+		go s.assignTrienodeHealTasks(trienodeHealResps, trienodeHealReqFails, cancel)
+		go s.assignTrienodeHealTasks(trienodeHealResps, trienodeHealReqFails, cancel)
+		go s.assignTrienodeHealTasks(trienodeHealResps, trienodeHealReqFails, cancel)
+		go s.assignTrienodeHealTasks(trienodeHealResps, trienodeHealReqFails, cancel)
+
+		go s.assignBytecodeHealTasks(bytecodeHealResps, bytecodeHealReqFails, cancel)
+		for {
+			if len(s.tasks) == 0 && s.healer.scheduler.Pending() == 0 {
+				fmt.Println("done")
+				return nil
+			}
 			// Sync phase done, run heal phase
-			s.assignTrienodeHealTasks(trienodeHealResps, trienodeHealReqFails, cancel)
-			s.assignBytecodeHealTasks(bytecodeHealResps, bytecodeHealReqFails, cancel)
-		}
-		// Wait for something to happen
-		select {
-		case <-s.update:
-			// Something happened (new peer, delivery, timeout), recheck tasks
-		case <-peerJoin:
-			// A new peer joined, try to schedule it new tasks
-		case id := <-peerDrop:
-			s.revertRequests(id)
-		case <-cancel:
-			return ErrCancelled
+			select {
+			case <-s.update:
+				// Something happened (new peer, delivery, timeout), recheck tasks
+			case <-peerJoin:
+				// A new peer joined, try to schedule it new tasks
+			case id := <-peerDrop:
+				s.revertRequests(id)
+			case <-cancel:
+				return ErrCancelled
 
-		case req := <-accountReqFails:
-			s.revertAccountRequest(req)
-		case req := <-bytecodeReqFails:
-			s.revertBytecodeRequest(req)
-		case req := <-storageReqFails:
-			s.revertStorageRequest(req)
-		case req := <-trienodeHealReqFails:
-			s.revertTrienodeHealRequest(req)
-		case req := <-bytecodeHealReqFails:
-			s.revertBytecodeHealRequest(req)
-
-		case res := <-accountResps:
-			s.processAccountResponse(res)
-		case res := <-bytecodeResps:
-			s.processBytecodeResponse(res)
-		case res := <-storageResps:
-			s.processStorageResponse(res)
-		case res := <-trienodeHealResps:
-			s.processTrienodeHealResponse(res)
-		case res := <-bytecodeHealResps:
-			s.processBytecodeHealResponse(res)
+			case req := <-trienodeHealReqFails:
+				s.revertTrienodeHealRequest(req)
+			case req := <-bytecodeHealReqFails:
+				s.revertBytecodeHealRequest(req)
+			case res := <-trienodeHealResps:
+				s.processTrienodeHealResponse(res)
+			case res := <-bytecodeHealResps:
+				s.processBytecodeHealResponse(res)
+			}
+			// Report stats if something meaningful happened
+			s.report(false)
 		}
-		// Report stats if something meaningful happened
-		s.report(false)
-	}
+
+	})
+
+	errg.Go(func() error {
+		defer func() {
+			if err := recover(); err != nil {
+				var msg string
+				for i := 2; ; i++ {
+					_, file, line, ok := runtime.Caller(i)
+					if !ok {
+						break
+					}
+					msg += fmt.Sprintf("%s:%d\n", file, line)
+				}
+				fmt.Println(err)
+				fmt.Println(msg)
+			}
+		}()
+
+		ticker := time.NewTicker(time.Second)
+		for {
+
+			// Remove all completed tasks and terminate sync if everything's done
+			s.cleanStorageTasks()
+			s.cleanAccountTasks()
+			if len(s.tasks) == 0 && s.healer.scheduler.Pending() == 0 {
+				return nil
+			}
+			// Assign all the data retrieval tasks to any free peers
+			if len(s.tasks) > 0 {
+				s.assignAccountTasks(accountResps, accountReqFails, cancel)
+				s.assignBytecodeTasks(bytecodeResps, bytecodeReqFails, cancel)
+				s.assignStorageTasks(storageResps, storageReqFails, cancel)
+			} else {
+				close(startHeal)
+				return nil
+			}
+			// Wait for something to happen
+			select {
+			case <-ticker.C:
+				// Force refresh
+			case <-s.update:
+				// Something happened (new peer, delivery, timeout), recheck tasks
+			case <-peerJoin:
+				// A new peer joined, try to schedule it new tasks
+			case id := <-peerDrop:
+				s.revertRequests(id)
+			case <-cancel:
+				return ErrCancelled
+
+			case req := <-accountReqFails:
+				s.revertAccountRequest(req)
+			case req := <-bytecodeReqFails:
+				s.revertBytecodeRequest(req)
+			case req := <-storageReqFails:
+				s.revertStorageRequest(req)
+
+			case res := <-accountResps:
+				s.processAccountResponse(res)
+			case res := <-bytecodeResps:
+				s.processBytecodeResponse(res)
+			case res := <-storageResps:
+				s.processStorageResponse(res)
+
+			}
+			// Report stats if something meaningful happened
+			s.report(false)
+		}
+	})
+
+	return errg.Wait()
 }
 
 // loadSyncStatus retrieves a previously aborted sync status from the database,
@@ -1151,216 +1297,291 @@ func (s *Syncer) assignStorageTasks(success chan *storageResponse, fail chan *st
 	}
 }
 
+var requestTimeLock sync.RWMutex
+var requestTime = make(map[uint64]*requestTimeGap)
+
+type requestTimeGap struct {
+	Peer      string
+	RequestID uint64
+	SendTime  time.Time
+}
+
+func (s *Syncer) fillHealTasks(success chan *trienodeHealResponse, cancel chan struct{}) {
+	// Iterate over pending tasks and try to find a peer to retrieve with
+	for {
+		select {
+		default:
+			if s.healer.scheduler.Pending() == 0 {
+				continue
+			}
+			// If there are not enough trie tasks queued to fully assign, fill the
+			// queue from the state sync scheduler. The trie synced schedules these
+			// together with bytecodes, so we need to queue them combined.
+			var (
+				want = maxTrieRequestCount*10 + maxCodeRequestCount
+			)
+
+			response := &trienodeHealResponse{
+				task: s.healer,
+			}
+
+			nodes, paths, codes := s.healer.scheduler.Missing(want)
+			for i, hash := range nodes {
+				dupTrieLock.RLock()
+				if node, ok := dupTriePath[hash]; ok {
+					response.hashes = append(response.hashes, hash)
+					response.nodes = append(response.nodes, node)
+				} else {
+					s.healer.trieTasksChan <- &healTaskObj{hash, paths[i]}
+				}
+				dupTrieLock.RUnlock()
+			}
+			for _, hash := range codes {
+				s.healer.codeTasksChan <- &healTaskObj{hash, nil}
+			}
+
+			go func() {
+				if len(response.hashes) > 0 {
+					success <- response
+				}
+			}()
+
+		case <-cancel:
+			return
+		}
+
+	}
+}
+
+var (
+	dupTrieLock sync.RWMutex
+	dupTriePath = make(map[common.Hash][]byte)
+)
+
 // assignTrienodeHealTasks attempts to match idle peers to trie node requests to
 // heal any trie errors caused by the snap sync's chunked retrieval model.
 func (s *Syncer) assignTrienodeHealTasks(success chan *trienodeHealResponse, fail chan *trienodeHealRequest, cancel chan struct{}) {
+	var (
+		hashes   = make([]common.Hash, 0, maxTrieRequestCount)
+		paths    = make([]trie.SyncPath, 0, maxTrieRequestCount)
+		pathsets = make([]TrieNodePathSet, 0, maxTrieRequestCount)
+		flush    = time.NewTicker(time.Second)
+	)
+	for {
+		select {
+		case <-cancel:
+			return
+		case <-flush.C:
+			if length := len(hashes); length > 0 {
+				if length > maxTrieRequestCount {
+					length = maxTrieRequestCount
+				}
+
+				if s.requestTrienodeTasks(
+					hashes[:length], paths[:length],
+					pathsets[:length], success, fail, cancel) {
+					hashes = hashes[length:]
+					paths = paths[length:]
+					pathsets = pathsets[length:]
+				}
+			}
+		case trieTask := <-s.healer.trieTasksChan:
+			hashes = append(hashes, trieTask.hash)
+			paths = append(paths, trieTask.path)
+			pathsets = append(pathsets, [][]byte(trieTask.path)) // TODO(karalabe): group requests by account hash
+
+			if len(hashes) >= maxTrieRequestCount &&
+				s.requestTrienodeTasks(
+					hashes[:maxTrieRequestCount], paths[:maxTrieRequestCount],
+					pathsets[:maxTrieRequestCount], success, fail, cancel) {
+				hashes = hashes[maxTrieRequestCount:]
+				paths = paths[maxTrieRequestCount:]
+				pathsets = pathsets[maxTrieRequestCount:]
+			}
+		}
+	}
+}
+
+func (s *Syncer) requestTrienodeTasks(
+	hashes []common.Hash, paths []trie.SyncPath,
+	pathsets []TrieNodePathSet, success chan *trienodeHealResponse,
+	fail chan *trienodeHealRequest, cancel chan struct{}) bool {
+	t := time.Now()
 	s.lock.Lock()
 	defer s.lock.Unlock()
-
-	// If there are no idle peers, short circuit assignment
-	if len(s.trienodeHealIdlers) == 0 {
-		return
+	// Task pending retrieval, try to find an idle peer. If no such peer
+	// exists, we probably assigned tasks for all (or they are stateless).
+	// Abort the entire assignment mechanism.
+	var idle string
+	for id := range s.trienodeHealIdlers {
+		// If the peer rejected a query in this sync cycle, don't bother asking
+		// again for anything, it's either out of sync or already pruned
+		if _, ok := s.statelessPeers[id]; ok {
+			continue
+		}
+		idle = id
+		break
 	}
-	// Iterate over pending tasks and try to find a peer to retrieve with
-	for len(s.healer.trieTasks) > 0 || s.healer.scheduler.Pending() > 0 {
-		// If there are not enough trie tasks queued to fully assign, fill the
-		// queue from the state sync scheduler. The trie synced schedules these
-		// together with bytecodes, so we need to queue them combined.
-		var (
-			have = len(s.healer.trieTasks) + len(s.healer.codeTasks)
-			want = maxTrieRequestCount + maxCodeRequestCount
-		)
-		if have < want {
-			nodes, paths, codes := s.healer.scheduler.Missing(want - have)
-			for i, hash := range nodes {
-				s.healer.trieTasks[hash] = paths[i]
-			}
-			for _, hash := range codes {
-				s.healer.codeTasks[hash] = struct{}{}
-			}
-		}
-		// If all the heal tasks are bytecodes or already downloading, bail
-		if len(s.healer.trieTasks) == 0 {
-			return
-		}
-		// Task pending retrieval, try to find an idle peer. If no such peer
-		// exists, we probably assigned tasks for all (or they are stateless).
-		// Abort the entire assignment mechanism.
-		var idle string
-		for id := range s.trienodeHealIdlers {
-			// If the peer rejected a query in this sync cycle, don't bother asking
-			// again for anything, it's either out of sync or already pruned
-			if _, ok := s.statelessPeers[id]; ok {
-				continue
-			}
-			idle = id
-			break
-		}
-		if idle == "" {
-			return
-		}
-		peer := s.peers[idle]
+	if idle == "" {
+		return false
+	}
+	peer := s.peers[idle]
 
-		// Matched a pending task to an idle peer, allocate a unique request id
-		var reqid uint64
-		for {
-			reqid = uint64(rand.Int63())
-			if reqid == 0 {
-				continue
-			}
-			if _, ok := s.trienodeHealReqs[reqid]; ok {
-				continue
-			}
-			break
+	// Matched a pending task to an idle peer, allocate a unique request id
+	var reqid uint64
+	for {
+		reqid = uint64(rand.Int63())
+		if reqid == 0 {
+			continue
 		}
-		// Generate the network query and send it to the peer
-		var (
-			hashes   = make([]common.Hash, 0, maxTrieRequestCount)
-			paths    = make([]trie.SyncPath, 0, maxTrieRequestCount)
-			pathsets = make([]TrieNodePathSet, 0, maxTrieRequestCount)
-		)
-		for hash, pathset := range s.healer.trieTasks {
-			delete(s.healer.trieTasks, hash)
+		if _, ok := s.trienodeHealReqs[reqid]; ok {
+			continue
+		}
+		break
+	}
 
-			hashes = append(hashes, hash)
-			paths = append(paths, pathset)
-			pathsets = append(pathsets, [][]byte(pathset)) // TODO(karalabe): group requests by account hash
+	req := &trienodeHealRequest{
+		peer:     idle,
+		id:       reqid,
+		deliver:  success,
+		revert:   fail,
+		cancel:   cancel,
+		stale:    make(chan struct{}),
+		hashes:   hashes,
+		paths:    paths,
+		task:     s.healer,
+		sendTime: time.Now(),
+	}
+	req.timeout = time.AfterFunc(requestTimeout, func() {
+		peer.Log().Debug("Trienode heal request timed out", "reqid", reqid)
+		s.scheduleRevertTrienodeHealRequest(req)
+	})
+	s.trienodeHealReqs[reqid] = req
+	delete(s.trienodeHealIdlers, idle)
 
-			if len(hashes) >= maxTrieRequestCount {
-				break
-			}
+	s.pend.Add(1)
+	go func(root common.Hash) {
+		defer s.pend.Done()
+		requestTimeLock.Lock()
+		requestTime[reqid] = &requestTimeGap{
+			Peer:      idle,
+			RequestID: reqid,
+			SendTime:  time.Now(),
 		}
-		req := &trienodeHealRequest{
-			peer:    idle,
-			id:      reqid,
-			deliver: success,
-			revert:  fail,
-			cancel:  cancel,
-			stale:   make(chan struct{}),
-			hashes:  hashes,
-			paths:   paths,
-			task:    s.healer,
-		}
-		req.timeout = time.AfterFunc(requestTimeout, func() {
-			peer.Log().Debug("Trienode heal request timed out", "reqid", reqid)
+
+		requestTimeLock.Unlock()
+		s.healer.knownStates += uint64(len(pathsets))
+		// Attempt to send the remote request and revert if it fails
+		if err := peer.RequestTrieNodes(reqid, root, pathsets, maxRequestSize); err != nil {
+			log.Debug("Failed to request trienode healers", "err", err)
+			fmt.Println("Failed to request trienode healers", "err", err)
 			s.scheduleRevertTrienodeHealRequest(req)
-		})
-		s.trienodeHealReqs[reqid] = req
-		delete(s.trienodeHealIdlers, idle)
-
-		s.pend.Add(1)
-		go func(root common.Hash) {
-			defer s.pend.Done()
-
-			// Attempt to send the remote request and revert if it fails
-			if err := peer.RequestTrieNodes(reqid, root, pathsets, maxRequestSize); err != nil {
-				log.Debug("Failed to request trienode healers", "err", err)
-				s.scheduleRevertTrienodeHealRequest(req)
-			}
-		}(s.root)
-	}
+		}
+		fmt.Println("send request", reqid, len(pathsets), time.Since(t))
+	}(s.root)
+	return true
 }
 
 // assignBytecodeHealTasks attempts to match idle peers to bytecode requests to
 // heal any trie errors caused by the snap sync's chunked retrieval model.
 func (s *Syncer) assignBytecodeHealTasks(success chan *bytecodeHealResponse, fail chan *bytecodeHealRequest, cancel chan struct{}) {
+	var (
+		hashes = make([]common.Hash, 0, maxTrieRequestCount)
+		flush  = time.NewTicker(time.Second)
+	)
+	for {
+		select {
+		case <-cancel:
+			return
+		case <-flush.C:
+			if length := len(hashes); length > 0 {
+				if length > maxCodeRequestCount {
+					length = maxCodeRequestCount
+				}
+				if s.requestBytecodeHealTasks(
+					hashes[:length], success, fail, cancel) {
+					hashes = hashes[length:]
+				}
+			}
+		case trieTask := <-s.healer.codeTasksChan:
+			hashes = append(hashes, trieTask.hash)
+
+			if len(hashes) >= maxCodeRequestCount &&
+				s.requestBytecodeHealTasks(
+					hashes[:maxCodeRequestCount], success, fail, cancel) {
+				hashes = hashes[maxCodeRequestCount:]
+			}
+		}
+	}
+}
+
+func (s *Syncer) requestBytecodeHealTasks(
+	hashes []common.Hash, success chan *bytecodeHealResponse,
+	fail chan *bytecodeHealRequest, cancel chan struct{}) bool {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
-	// If there are no idle peers, short circuit assignment
-	if len(s.bytecodeHealIdlers) == 0 {
-		return
+	// Task pending retrieval, try to find an idle peer. If no such peer
+	// exists, we probably assigned tasks for all (or they are stateless).
+	// Abort the entire assignment mechanism.
+	var idle string
+	for id := range s.bytecodeHealIdlers {
+		// If the peer rejected a query in this sync cycle, don't bother asking
+		// again for anything, it's either out of sync or already pruned
+		if _, ok := s.statelessPeers[id]; ok {
+			continue
+		}
+		idle = id
+		break
 	}
-	// Iterate over pending tasks and try to find a peer to retrieve with
-	for len(s.healer.codeTasks) > 0 || s.healer.scheduler.Pending() > 0 {
-		// If there are not enough trie tasks queued to fully assign, fill the
-		// queue from the state sync scheduler. The trie synced schedules these
-		// together with trie nodes, so we need to queue them combined.
-		var (
-			have = len(s.healer.trieTasks) + len(s.healer.codeTasks)
-			want = maxTrieRequestCount + maxCodeRequestCount
-		)
-		if have < want {
-			nodes, paths, codes := s.healer.scheduler.Missing(want - have)
-			for i, hash := range nodes {
-				s.healer.trieTasks[hash] = paths[i]
-			}
-			for _, hash := range codes {
-				s.healer.codeTasks[hash] = struct{}{}
-			}
-		}
-		// If all the heal tasks are trienodes or already downloading, bail
-		if len(s.healer.codeTasks) == 0 {
-			return
-		}
-		// Task pending retrieval, try to find an idle peer. If no such peer
-		// exists, we probably assigned tasks for all (or they are stateless).
-		// Abort the entire assignment mechanism.
-		var idle string
-		for id := range s.bytecodeHealIdlers {
-			// If the peer rejected a query in this sync cycle, don't bother asking
-			// again for anything, it's either out of sync or already pruned
-			if _, ok := s.statelessPeers[id]; ok {
-				continue
-			}
-			idle = id
-			break
-		}
-		if idle == "" {
-			return
-		}
-		peer := s.peers[idle]
+	if idle == "" {
+		return false
+	}
+	peer := s.peers[idle]
 
-		// Matched a pending task to an idle peer, allocate a unique request id
-		var reqid uint64
-		for {
-			reqid = uint64(rand.Int63())
-			if reqid == 0 {
-				continue
-			}
-			if _, ok := s.bytecodeHealReqs[reqid]; ok {
-				continue
-			}
-			break
+	// Matched a pending task to an idle peer, allocate a unique request id
+	var reqid uint64
+	for {
+		reqid = uint64(rand.Int63())
+		if reqid == 0 {
+			continue
 		}
-		// Generate the network query and send it to the peer
-		hashes := make([]common.Hash, 0, maxCodeRequestCount)
-		for hash := range s.healer.codeTasks {
-			delete(s.healer.codeTasks, hash)
+		if _, ok := s.bytecodeHealReqs[reqid]; ok {
+			continue
+		}
+		break
+	}
 
-			hashes = append(hashes, hash)
-			if len(hashes) >= maxCodeRequestCount {
-				break
-			}
-		}
-		req := &bytecodeHealRequest{
-			peer:    idle,
-			id:      reqid,
-			deliver: success,
-			revert:  fail,
-			cancel:  cancel,
-			stale:   make(chan struct{}),
-			hashes:  hashes,
-			task:    s.healer,
-		}
-		req.timeout = time.AfterFunc(requestTimeout, func() {
-			peer.Log().Debug("Bytecode heal request timed out", "reqid", reqid)
+	// Generate the network query and send it to the peer
+	req := &bytecodeHealRequest{
+		peer:    idle,
+		id:      reqid,
+		deliver: success,
+		revert:  fail,
+		cancel:  cancel,
+		stale:   make(chan struct{}),
+		hashes:  hashes,
+		task:    s.healer,
+	}
+	req.timeout = time.AfterFunc(requestTimeout, func() {
+		peer.Log().Debug("Bytecode heal request timed out", "reqid", reqid)
+		s.scheduleRevertBytecodeHealRequest(req)
+	})
+	s.bytecodeHealReqs[reqid] = req
+	delete(s.bytecodeHealIdlers, idle)
+
+	s.pend.Add(1)
+	go func() {
+		defer s.pend.Done()
+
+		// Attempt to send the remote request and revert if it fails
+		if err := peer.RequestByteCodes(reqid, hashes, maxRequestSize); err != nil {
+			log.Debug("Failed to request bytecode healers", "err", err)
 			s.scheduleRevertBytecodeHealRequest(req)
-		})
-		s.bytecodeHealReqs[reqid] = req
-		delete(s.bytecodeHealIdlers, idle)
+		}
+	}()
 
-		s.pend.Add(1)
-		go func() {
-			defer s.pend.Done()
-
-			// Attempt to send the remote request and revert if it fails
-			if err := peer.RequestByteCodes(reqid, hashes, maxRequestSize); err != nil {
-				log.Debug("Failed to request bytecode healers", "err", err)
-				s.scheduleRevertBytecodeHealRequest(req)
-			}
-		}()
-	}
+	return true
 }
 
 // revertRequests locates all the currently pending reuqests from a particular
@@ -1582,7 +1803,7 @@ func (s *Syncer) revertTrienodeHealRequest(req *trienodeHealRequest) {
 	// retrievals as not-pending, ready for resheduling
 	req.timeout.Stop()
 	for i, hash := range req.hashes {
-		req.task.trieTasks[hash] = req.paths[i]
+		req.task.trieTasksChan <- &healTaskObj{hash, req.paths[i]}
 	}
 }
 
@@ -1623,7 +1844,7 @@ func (s *Syncer) revertBytecodeHealRequest(req *bytecodeHealRequest) {
 	// retrievals as not-pending, ready for resheduling
 	req.timeout.Stop()
 	for _, hash := range req.hashes {
-		req.task.codeTasks[hash] = struct{}{}
+		req.task.codeTasksChan <- &healTaskObj{hash, nil}
 	}
 }
 
@@ -1967,12 +2188,16 @@ func (s *Syncer) processStorageResponse(res *storageResponse) {
 // processTrienodeHealResponse integrates an already validated trienode response
 // into the healer tasks.
 func (s *Syncer) processTrienodeHealResponse(res *trienodeHealResponse) {
+	// t := time.Now()
+	// defer func() {
+	// 	fmt.Println("processTrienodeHealResponse time:", time.Since(t), s.healer.scheduler.NodeReqs(), len(res.hashes), "queue:", s.healer.scheduler.Queue(), "s.trienodeHealDups", s.trienodeHealDups)
+	// }()
 	for i, hash := range res.hashes {
 		node := res.nodes[i]
 
 		// If the trie node was not delivered, reschedule it
 		if node == nil {
-			res.task.trieTasks[hash] = res.paths[i]
+			res.task.trieTasksChan <- &healTaskObj{hash, res.paths[i]}
 			continue
 		}
 		// Push the trie node into the state syncer
@@ -1982,6 +2207,9 @@ func (s *Syncer) processTrienodeHealResponse(res *trienodeHealResponse) {
 		err := s.healer.scheduler.Process(trie.SyncResult{Hash: hash, Data: node})
 		switch err {
 		case nil:
+			dupTrieLock.Lock()
+			dupTriePath[hash] = node
+			dupTrieLock.Unlock()
 		case trie.ErrAlreadyProcessed:
 			s.trienodeHealDups++
 		case trie.ErrNotRequested:
@@ -1997,6 +2225,7 @@ func (s *Syncer) processTrienodeHealResponse(res *trienodeHealResponse) {
 	if err := batch.Write(); err != nil {
 		log.Crit("Failed to persist healing data", "err", err)
 	}
+	s.healer.pulledStates += uint64(len(res.hashes))
 	log.Debug("Persisted set of healing data", "type", "trienodes", "bytes", common.StorageSize(batch.ValueSize()))
 }
 
@@ -2500,6 +2729,7 @@ func (s *Syncer) OnTrieNodes(peer SyncPeer, id uint64, trienodes [][]byte) error
 	// the requested data. For bytecode range queries that means the peer is not
 	// yet synced.
 	if len(trienodes) == 0 {
+		// fmt.Println("Peer rejected trienode heal request", req.id)
 		logger.Debug("Peer rejected trienode heal request")
 		s.statelessPeers[peer.ID()] = struct{}{}
 		s.lock.Unlock()
@@ -2543,6 +2773,21 @@ func (s *Syncer) OnTrieNodes(peer SyncPeer, id uint64, trienodes [][]byte) error
 		paths:  req.paths,
 		nodes:  nodes,
 	}
+	requestTimeLock.Lock()
+	if v, ok := requestTime[req.id]; ok {
+		el := time.Since(v.SendTime)
+		// if el > time.Second {
+		// 	s.lock.Lock()
+		// 	if _, ok := s.statelessPeers[v.Peer]; !ok {
+		// 		s.statelessPeers[v.Peer] = struct{}{}
+		// 	}
+		// 	s.lock.Unlock()
+		// }
+		fmt.Printf("Recive heal task response peer: %s, el: %v, reqid: %d, resp.hashes: %d, resp.nodes: %d, resp.paths: %d\n", v.Peer, el, req.id, len(response.hashes), len(response.nodes), len(response.paths))
+		delete(requestTime, v.RequestID)
+	}
+	requestTimeLock.Unlock()
+
 	select {
 	case req.deliver <- response:
 	case <-req.cancel:
@@ -2724,6 +2969,7 @@ func (s *Syncer) reportSyncProgress(force bool) {
 
 // reportHealProgress calculates various status reports and provides it to the user.
 func (s *Syncer) reportHealProgress(force bool) {
+
 	// Don't report all the events, just occasionally
 	if !force && time.Since(s.logTime) < 8*time.Second {
 		return
@@ -2737,8 +2983,10 @@ func (s *Syncer) reportHealProgress(force bool) {
 		accounts = fmt.Sprintf("%v@%v", log.FormatLogfmtUint64(s.accountHealed), s.accountHealedBytes.TerminalString())
 		storage  = fmt.Sprintf("%v@%v", log.FormatLogfmtUint64(s.storageHealed), s.storageHealedBytes.TerminalString())
 	)
+	fmt.Println("s.root", s.root.String(), s.startTime)
+	fmt.Println("len(s.healer.trieTasks)", len(s.healer.trieTasks), "len(s.healer.codeTasks)", len(s.healer.codeTasks), "pending:", s.healer.scheduler.Pending())
 	log.Info("State heal in progress", "accounts", accounts, "slots", storage,
-		"codes", bytecode, "nodes", trienode, "pending", s.healer.scheduler.Pending())
+		"codes", bytecode, "nodes", trienode, "pending", s.healer.scheduler.Pending(), "queue", s.healer.scheduler.Queue(), "knownStates", s.healer.knownStates, "pulledStates", s.healer.pulledStates)
 }
 
 // estimateRemainingSlots tries to determine roughly how many slots are left in

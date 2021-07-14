@@ -19,6 +19,7 @@ package trie
 import (
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/prque"
@@ -118,17 +119,91 @@ func (batch *syncMemBatch) hasCode(hash common.Hash) bool {
 	return ok
 }
 
+type syncRequest struct {
+	reqs map[common.Hash]*request
+	lock sync.RWMutex
+}
+
+func (s *syncRequest) getReq(key common.Hash) (*request, bool) {
+	s.lock.RLock()
+	defer s.lock.RUnlock()
+	v, ok := s.reqs[key]
+	return v, ok
+}
+
+func (s *syncRequest) setReq(key common.Hash, value *request) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	s.reqs[key] = value
+}
+
+func (s *syncRequest) deleteReq(key common.Hash) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	delete(s.reqs, key)
+}
+
+func (s *syncRequest) len() int {
+	s.lock.RLock()
+	defer s.lock.RUnlock()
+	return len(s.reqs)
+}
+
 // Sync is the main state trie synchronisation scheduler, which provides yet
 // unknown trie hashes to retrieve, accepts node data associated with said hashes
 // and reconstructs the trie step by step until all is done.
 type Sync struct {
-	database ethdb.KeyValueReader     // Persistent database to check for existing entries
-	membatch *syncMemBatch            // Memory buffer to avoid frequent database writes
-	nodeReqs map[common.Hash]*request // Pending requests pertaining to a trie node hash
-	codeReqs map[common.Hash]*request // Pending requests pertaining to a code hash
-	queue    *prque.Prque             // Priority queue with the pending requests
-	fetches  map[int]int              // Number of active fetches per trie node depth
-	bloom    *SyncBloom               // Bloom filter for fast state existence checks
+	database    ethdb.KeyValueReader // Persistent database to check for existing entries
+	membatch    *syncMemBatch        // Memory buffer to avoid frequent database writes
+	nodeReqs    *syncRequest         // Pending requests pertaining to a trie node hash
+	codeReqs    *syncRequest         // Pending requests pertaining to a code hash
+	queueLock   sync.RWMutex
+	queue       *prque.Prque // Priority queue with the pending requests
+	fetchesLock sync.RWMutex
+	fetches     map[int]int // Number of active fetches per trie node depth
+	bloom       *SyncBloom  // Bloom filter for fast state existence checks
+}
+
+func (s *Sync) Pop() (interface{}, int64) {
+	s.queueLock.Lock()
+	defer s.queueLock.Unlock()
+	return s.queue.Pop()
+}
+
+func (s *Sync) Push(data interface{}, priority int64) {
+	s.queueLock.Lock()
+	defer s.queueLock.Unlock()
+	s.queue.Push(data, priority)
+}
+
+func (s *Sync) Peek() (interface{}, int64) {
+	s.queueLock.Lock()
+	defer s.queueLock.Unlock()
+	return s.queue.Peek()
+}
+
+func (s *Sync) Size() int {
+	s.queueLock.RLock()
+	defer s.queueLock.RUnlock()
+	return s.queue.Size()
+}
+
+func (s *Sync) Empty() bool {
+	s.queueLock.RLock()
+	defer s.queueLock.RUnlock()
+	return s.queue.Empty()
+}
+
+func (s *Sync) getFetchDepth(key int) int {
+	s.fetchesLock.RLock()
+	defer s.fetchesLock.RUnlock()
+	return s.fetches[key]
+}
+
+func (s *Sync) addFetchDepth(key, value int) {
+	s.fetchesLock.Lock()
+	defer s.fetchesLock.Unlock()
+	s.fetches[key] += value
 }
 
 // NewSync creates a new trie data download scheduler.
@@ -136,8 +211,8 @@ func NewSync(root common.Hash, database ethdb.KeyValueReader, callback LeafCallb
 	ts := &Sync{
 		database: database,
 		membatch: newSyncMemBatch(),
-		nodeReqs: make(map[common.Hash]*request),
-		codeReqs: make(map[common.Hash]*request),
+		nodeReqs: &syncRequest{reqs: make(map[common.Hash]*request)},
+		codeReqs: &syncRequest{reqs: make(map[common.Hash]*request)},
 		queue:    prque.New(nil),
 		fetches:  make(map[int]int),
 		bloom:    bloom,
@@ -174,7 +249,7 @@ func (s *Sync) AddSubTrie(root common.Hash, path []byte, parent common.Hash, cal
 	}
 	// If this sub-trie has a designated parent, link them together
 	if parent != (common.Hash{}) {
-		ancestor := s.nodeReqs[parent]
+		ancestor, _ := s.nodeReqs.getReq(parent)
 		if ancestor == nil {
 			panic(fmt.Sprintf("sub-trie ancestor not found: %x", parent))
 		}
@@ -216,7 +291,7 @@ func (s *Sync) AddCodeEntry(hash common.Hash, path []byte, parent common.Hash) {
 	}
 	// If this sub-trie has a designated parent, link them together
 	if parent != (common.Hash{}) {
-		ancestor := s.nodeReqs[parent] // the parent of codereq can ONLY be nodereq
+		ancestor, _ := s.nodeReqs.getReq(parent) // the parent of codereq can ONLY be nodereq
 		if ancestor == nil {
 			panic(fmt.Sprintf("raw-entry ancestor not found: %x", parent))
 		}
@@ -235,21 +310,21 @@ func (s *Sync) Missing(max int) (nodes []common.Hash, paths []SyncPath, codes []
 		nodePaths  []SyncPath
 		codeHashes []common.Hash
 	)
-	for !s.queue.Empty() && (max == 0 || len(nodeHashes)+len(codeHashes) < max) {
-		// Retrieve th enext item in line
-		item, prio := s.queue.Peek()
 
+	for !s.Empty() && (max == 0 || len(nodeHashes)+len(codeHashes) < max) {
+		// Retrieve th enext item in line
+		item, prio := s.Peek()
 		// If we have too many already-pending tasks for this depth, throttle
 		depth := int(prio >> 56)
-		if s.fetches[depth] > maxFetchesPerDepth {
+		if s.getFetchDepth(depth) > maxFetchesPerDepth {
 			break
 		}
 		// Item is allowed to be scheduled, add it to the task list
-		s.queue.Pop()
-		s.fetches[depth]++
+		s.Pop()
+		s.addFetchDepth(depth, 1)
 
 		hash := item.(common.Hash)
-		if req, ok := s.nodeReqs[hash]; ok {
+		if req, ok := s.nodeReqs.getReq(hash); ok {
 			nodeHashes = append(nodeHashes, hash)
 			nodePaths = append(nodePaths, newSyncPath(req.path))
 		} else {
@@ -267,18 +342,20 @@ func (s *Sync) Missing(max int) (nodes []common.Hash, paths []SyncPath, codes []
 // there is no downside.
 func (s *Sync) Process(result SyncResult) error {
 	// If the item was not requested either for code or node, bail out
-	if s.nodeReqs[result.Hash] == nil && s.codeReqs[result.Hash] == nil {
+	node, _ := s.nodeReqs.getReq(result.Hash)
+	code, _ := s.codeReqs.getReq(result.Hash)
+	if node == nil && code == nil {
 		return ErrNotRequested
 	}
 	// There is an pending code request for this data, commit directly
 	var filled bool
-	if req := s.codeReqs[result.Hash]; req != nil && req.data == nil {
+	if req := code; req != nil && req.data == nil {
 		filled = true
 		req.data = result.Data
 		s.commit(req)
 	}
 	// There is an pending node request for this data, fill it.
-	if req := s.nodeReqs[result.Hash]; req != nil && req.data == nil {
+	if req := node; req != nil && req.data == nil {
 		filled = true
 		// Decode the node data content and update the request
 		node, err := decodeNode(result.Hash[:], result.Data)
@@ -292,6 +369,7 @@ func (s *Sync) Process(result SyncResult) error {
 		if err != nil {
 			return err
 		}
+
 		if len(requests) == 0 && req.deps == 0 {
 			s.commit(req)
 		} else {
@@ -330,7 +408,15 @@ func (s *Sync) Commit(dbw ethdb.Batch) error {
 
 // Pending returns the number of state entries currently pending for download.
 func (s *Sync) Pending() int {
-	return len(s.nodeReqs) + len(s.codeReqs)
+	return s.nodeReqs.len() + s.codeReqs.len()
+}
+
+func (s *Sync) NodeReqs() int {
+	return s.nodeReqs.len()
+}
+
+func (s *Sync) Queue() int {
+	return s.Size()
 }
 
 // schedule inserts a new state retrieval request into the fetch queue. If there
@@ -342,11 +428,12 @@ func (s *Sync) schedule(req *request) {
 		reqset = s.codeReqs
 	}
 	// If we're already requesting this node, add a new reference and stop
-	if old, ok := reqset[req.hash]; ok {
+	if old, ok := reqset.getReq(req.hash); ok {
 		old.parents = append(old.parents, req.parents...)
 		return
 	}
-	reqset[req.hash] = req
+
+	reqset.setReq(req.hash, req)
 
 	// Schedule the request for future retrieval. This queue is shared
 	// by both node requests and code requests. It can happen that there
@@ -357,7 +444,7 @@ func (s *Sync) schedule(req *request) {
 	for i := 0; i < 14 && i < len(req.path); i++ {
 		prio |= int64(15-req.path[i]) << (52 - i*4) // 15-nibble => lexicographic order
 	}
-	s.queue.Push(req.hash, prio)
+	s.Push(req.hash, prio)
 }
 
 // children retrieves all the missing children of a state trie entry for future
@@ -446,12 +533,12 @@ func (s *Sync) commit(req *request) (err error) {
 	// Write the node content to the membatch
 	if req.code {
 		s.membatch.codes[req.hash] = req.data
-		delete(s.codeReqs, req.hash)
-		s.fetches[len(req.path)]--
+		s.codeReqs.deleteReq(req.hash)
+		s.addFetchDepth(len(req.path), -1)
 	} else {
 		s.membatch.nodes[req.hash] = req.data
-		delete(s.nodeReqs, req.hash)
-		s.fetches[len(req.path)]--
+		s.nodeReqs.deleteReq(req.hash)
+		s.addFetchDepth(len(req.path), -1)
 	}
 	// Check all parents for completion
 	for _, parent := range req.parents {

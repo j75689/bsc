@@ -1833,8 +1833,10 @@ func (d *Downloader) processFastSyncContent() error {
 			// need to be taken into account, otherwise we're detecting the pivot move
 			// late and will drop peers due to unavailable state!!!
 			if height := latest.Number.Uint64(); height >= pivot.Number.Uint64()+2*uint64(fsMinFullBlocks)-uint64(reorgProtHeaderDelay) {
-				log.Warn("Pivot became stale, moving", "old", pivot.Number.Uint64(), "new", height-uint64(fsMinFullBlocks)+uint64(reorgProtHeaderDelay))
-				pivot = results[len(results)-1-fsMinFullBlocks+reorgProtHeaderDelay].Header // must exist as lower old pivot is uncommitted
+				// log.Warn("Pivot became stale, moving", "old", pivot.Number.Uint64(), "new", height-uint64(fsMinFullBlocks)+uint64(reorgProtHeaderDelay))
+				// pivot = results[len(results)-1-fsMinFullBlocks+reorgProtHeaderDelay].Header // must exist as lower old pivot is uncommitted
+				log.Warn("Pivot became stale, moving", "old", pivot.Number.Uint64(), "new", height+uint64(reorgProtHeaderDelay))
+				pivot = results[len(results)-1].Header // must exist as lower old pivot is uncommitted
 
 				d.pivotLock.Lock()
 				d.pivotHeader = pivot
