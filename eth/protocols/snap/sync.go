@@ -550,8 +550,8 @@ func (s *Syncer) Sync(root common.Hash, cancel chan struct{}) error {
 	s.root = root
 	s.healer = &healTask{
 		scheduler:     state.NewStateSync(root, s.db, nil, s.onHealState),
-		trieTasksChan: make(chan *healTaskObj, maxTrieRequestCount),
-		codeTasksChan: make(chan *healTaskObj, maxCodeRequestCount),
+		trieTasksChan: make(chan *healTaskObj, maxTrieRequestCount*concurrencyRequestHealTaskNum),
+		codeTasksChan: make(chan *healTaskObj, maxCodeRequestCount*concurrencyRequestHealTaskNum),
 	}
 	s.statelessPeers = make(map[string]struct{})
 	s.lock.Unlock()
@@ -1242,33 +1242,16 @@ func (s *Syncer) fillHealTasks(success chan *trienodeHealResponse, cancel chan s
 			// queue from the state sync scheduler. The trie synced schedules these
 			// together with bytecodes, so we need to queue them combined.
 			var (
-				want = maxTrieRequestCount*10 + maxCodeRequestCount
+				want = (maxTrieRequestCount + maxCodeRequestCount) * concurrencyRequestHealTaskNum
 			)
-
-			response := &trienodeHealResponse{
-				task: s.healer,
-			}
 
 			nodes, paths, codes := s.healer.scheduler.Missing(want)
 			for i, hash := range nodes {
-				dupTrieLock.RLock()
-				if node, ok := dupTriePath[hash]; ok {
-					response.hashes = append(response.hashes, hash)
-					response.nodes = append(response.nodes, node)
-				} else {
-					s.healer.trieTasksChan <- &healTaskObj{hash, paths[i]}
-				}
-				dupTrieLock.RUnlock()
+				s.healer.trieTasksChan <- &healTaskObj{hash, paths[i]}
 			}
 			for _, hash := range codes {
 				s.healer.codeTasksChan <- &healTaskObj{hash, nil}
 			}
-
-			go func() {
-				if len(response.hashes) > 0 {
-					success <- response
-				}
-			}()
 
 		case <-cancel:
 			return
@@ -1276,11 +1259,6 @@ func (s *Syncer) fillHealTasks(success chan *trienodeHealResponse, cancel chan s
 
 	}
 }
-
-var (
-	dupTrieLock sync.RWMutex
-	dupTriePath = make(map[common.Hash][]byte)
-)
 
 // assignTrienodeHealTasks attempts to match idle peers to trie node requests to
 // heal any trie errors caused by the snap sync's chunked retrieval model.
@@ -2120,9 +2098,6 @@ func (s *Syncer) processTrienodeHealResponse(res *trienodeHealResponse) {
 		err := s.healer.scheduler.Process(trie.SyncResult{Hash: hash, Data: node})
 		switch err {
 		case nil:
-			dupTrieLock.Lock()
-			dupTriePath[hash] = node
-			dupTrieLock.Unlock()
 		case trie.ErrAlreadyProcessed:
 			s.trienodeHealDups++
 		case trie.ErrNotRequested:
