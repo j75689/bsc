@@ -54,7 +54,7 @@ var (
 
 const (
 	// maxRequestSize is the maximum number of bytes to request from a remote peer.
-	maxRequestSize = 128 * 1024
+	maxRequestSize = 256 * 1024
 
 	// maxStorageSetRequestCount is the maximum number of contracts to request the
 	// storage of in a single query. If this number is too low, we're not filling
@@ -95,7 +95,7 @@ var (
 
 var (
 	flushHealTaskTime             = 500 * time.Millisecond
-	concurrencyRequestHealTaskNum = 5
+	concurrencyRequestHealTaskNum = 10
 )
 
 // ErrCancelled is returned from snap syncing if the operation was prematurely
