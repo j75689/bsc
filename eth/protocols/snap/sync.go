@@ -52,7 +52,7 @@ var (
 
 const (
 	// maxRequestSize is the maximum number of bytes to request from a remote peer.
-	maxRequestSize = 128 * 1024
+	maxRequestSize = 256 * 1024
 
 	// maxStorageSetRequestCount is the maximum number of contracts to request the
 	// storage of in a single query. If this number is too low, we're not filling
@@ -74,7 +74,7 @@ const (
 	// a single query. If this number is too low, we're not filling responses fully
 	// and waste round trip times. If it's too high, we're capping responses and
 	// waste bandwidth.
-	maxTrieRequestCount = 256
+	maxTrieRequestCount = 1024
 )
 
 var (
@@ -604,6 +604,7 @@ func (s *Syncer) Sync(root common.Hash, cancel chan struct{}) error {
 		bytecodeHealReqFails = make(chan *bytecodeHealRequest)
 		trienodeHealResps    = make(chan *trienodeHealResponse)
 		bytecodeHealResps    = make(chan *bytecodeHealResponse)
+		ticker               = time.NewTicker(500 * time.Millisecond)
 	)
 	for {
 		// Remove all completed tasks and terminate sync if everything's done
@@ -624,6 +625,8 @@ func (s *Syncer) Sync(root common.Hash, cancel chan struct{}) error {
 		}
 		// Wait for something to happen
 		select {
+		case <-ticker.C:
+			// Force refresh
 		case <-s.update:
 			// Something happened (new peer, delivery, timeout), recheck tasks
 		case <-peerJoin:
