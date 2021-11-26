@@ -19,7 +19,9 @@ jobs:
       
       - name: Exit if not on target branch
         if: endsWith(github.ref, 'develop') == false
-        run: exit 0
+        run: 
+          echo "${{ github.ref }}"
+          exit 0
 
       - name: Install Go
         uses: actions/setup-go@v2
