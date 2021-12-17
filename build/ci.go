@@ -829,7 +829,7 @@ func doAndroidArchive(cmdline []string) {
 	}
 
 	// Build gomobile.
-	install := tc.Install(GOBIN, "golang.org/x/mobile/cmd/gomobile@latest", "golang.org/x/mobile/cmd/gobind@latest")
+	install := tc.Install(GOBIN, true, "golang.org/x/mobile/cmd/gomobile@latest", "golang.org/x/mobile/cmd/gobind@latest")
 	install.Env = append(install.Env)
 	build.MustRun(install)
 
@@ -960,7 +960,7 @@ func doXCodeFramework(cmdline []string) {
 	tc := new(build.GoToolchain)
 
 	// Build gomobile.
-	build.MustRun(tc.Install(GOBIN, "golang.org/x/mobile/cmd/gomobile@latest", "golang.org/x/mobile/cmd/gobind@latest"))
+	build.MustRun(tc.Install(GOBIN, true, "golang.org/x/mobile/cmd/gomobile@latest", "golang.org/x/mobile/cmd/gobind@latest"))
 
 	// Ensure all dependencies are available. This is required to make
 	// gomobile bind work because it expects go.sum to contain all checksums.
@@ -1054,7 +1054,7 @@ func doXgo(cmdline []string) {
 	var tc build.GoToolchain
 
 	// Make sure xgo is available for cross compilation
-	build.MustRun(tc.Install(GOBIN, "github.com/karalabe/xgo@latest"))
+	build.MustRun(tc.Install(GOBIN, false, "src.techknowlogick.com/xgo")) // instead karalabe/xgo with techknowlogick/xgo to support go module
 
 	// If all tools building is requested, build everything the builder wants
 	args := append(buildFlags(env), flag.Args()...)
@@ -1074,7 +1074,7 @@ func doXgo(cmdline []string) {
 
 	// Otherwise execute the explicit cross compilation
 	path := args[len(args)-1]
-	args = append(args[:len(args)-1], []string{"--dest", GOBIN, path}...)
+	args = append(args[:len(args)-1], []string{"--out", "geth", "--dest", GOBIN, path}...)
 	build.MustRun(xgoTool(args))
 }
 

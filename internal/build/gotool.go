@@ -62,13 +62,15 @@ func (g *GoToolchain) Go(command string, args ...string) *exec.Cmd {
 // This can be used to install auxiliary build tools without modifying the local go.mod and
 // go.sum files. To install tools which are not required by go.mod, ensure that all module
 // paths in 'args' contain a module version suffix (e.g. "...@latest").
-func (g *GoToolchain) Install(gobin string, args ...string) *exec.Cmd {
+func (g *GoToolchain) Install(gobin string, modReadonly bool, args ...string) *exec.Cmd {
 	if !filepath.IsAbs(gobin) {
 		panic("GOBIN must be an absolute path")
 	}
 	tool := g.goTool("install")
 	tool.Env = append(tool.Env, "GOBIN="+gobin)
-	tool.Args = append(tool.Args, "-mod=readonly")
+	if modReadonly {
+		tool.Args = append(tool.Args, "-mod=readonly")
+	}
 	tool.Args = append(tool.Args, args...)
 
 	// Ensure GOPATH is set because go install seems to absolutely require it. This uses

@@ -5,7 +5,7 @@
 .PHONY: geth android ios geth-cross evm all test truffle-test clean
 .PHONY: geth-linux geth-linux-386 geth-linux-amd64 geth-linux-mips64 geth-linux-mips64le
 .PHONY: geth-linux-arm geth-linux-arm-5 geth-linux-arm-6 geth-linux-arm-7 geth-linux-arm64
-.PHONY: geth-darwin geth-darwin-386 geth-darwin-amd64
+.PHONY: geth-darwin
 .PHONY: geth-windows geth-windows-386 geth-windows-amd64
 
 GOBIN = ./build/bin
@@ -128,19 +128,11 @@ geth-linux-mips64le:
 	@echo "Linux MIPS64le cross compilation done:"
 	@ls -ld $(GOBIN)/geth-linux-* | grep mips64le
 
-geth-darwin: geth-darwin-386 geth-darwin-amd64
-	@echo "Darwin cross compilation done:"
-	@ls -ld $(GOBIN)/geth-darwin-*
-
-geth-darwin-386:
-	$(GORUN) build/ci.go xgo -- --go=$(GO) --targets=darwin/386 -v ./cmd/geth
+geth-darwin:
+	$(GORUN) build/ci.go xgo -- --go=$(GO) --targets=darwin/* -v ./cmd/geth
 	@echo "Darwin 386 cross compilation done:"
-	@ls -ld $(GOBIN)/geth-darwin-* | grep 386
-
-geth-darwin-amd64:
-	$(GORUN) build/ci.go xgo -- --go=$(GO) --targets=darwin/amd64 -v ./cmd/geth
-	@echo "Darwin amd64 cross compilation done:"
-	@ls -ld $(GOBIN)/geth-darwin-* | grep amd64
+	@ls -ld $(GOBIN)/geth-darwin-* | grep "amd64"
+	@ls -ld $(GOBIN)/geth-darwin-* | grep "arm64"
 
 geth-windows: geth-windows-386 geth-windows-amd64
 	@echo "Windows cross compilation done:"
