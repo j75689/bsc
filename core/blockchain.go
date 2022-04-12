@@ -198,16 +198,16 @@ type BlockChain struct {
 	txLookupLimit uint64
 	triesInMemory uint64
 
-	hc             *HeaderChain
-	rmLogsFeed     event.Feed
-	chainFeed      event.Feed
-	chainSideFeed  event.Feed
-	chainHeadFeed  event.Feed
+	hc            *HeaderChain
+	rmLogsFeed    event.Feed
+	chainFeed     event.Feed
+	chainSideFeed event.Feed
+	chainHeadFeed event.Feed
 	chainBlockFeed event.Feed
-	logsFeed       event.Feed
-	blockProcFeed  event.Feed
-	scope          event.SubscriptionScope
-	genesisBlock   *types.Block
+	logsFeed      event.Feed
+	blockProcFeed event.Feed
+	scope         event.SubscriptionScope
+	genesisBlock  *types.Block
 
 	chainmu sync.RWMutex // blockchain insertion lock
 
@@ -529,27 +529,27 @@ func (bc *BlockChain) cacheDiffLayer(diffLayer *types.DiffLayer, sorted bool) {
 	accNum := len(diffLayer.Accounts)
 	diffLayerMar := types.DiffLayerMar{
 		BlockHash: diffLayer.BlockHash,
-		Number:    diffLayer.Number,
-		Receipts:  diffLayer.Receipts,
-		Codes:     diffLayer.Codes,
+		Number: diffLayer.Number,
+		Receipts: diffLayer.Receipts,
+		Codes: diffLayer.Codes,
 		Destructs: diffLayer.Destructs,
-		Accounts:  make([]types.DiffAccountMar, accNum),
-		Storages:  diffLayer.Storages,
-		DiffHash:  diffLayer.DiffHash,
+		Accounts: make([]types.DiffAccountMar, accNum),
+		Storages: diffLayer.Storages,
+		DiffHash: diffLayer.DiffHash,
 	}
 	for index, account := range diffLayer.Accounts {
 		full, _ := snapshot.FullAccount(account.Blob)
 		fullAccount := types.Account{
-			Nonce:    full.Nonce,
-			Balance:  full.Balance,
-			Root:     full.Root,
+			Nonce: full.Nonce,
+			Balance: full.Balance,
+			Root: full.Root,
 			CodeHash: full.CodeHash,
 		}
 		diffLayerMar.Accounts[index] = types.DiffAccountMar{
-			Account:     account.Account,
+			Account: account.Account,
 			FullAccount: fullAccount,
 		}
-	}
+ 	}
 	log.Info("##cache difflayer", "number", diffLayer.Number, "hash", diffLayer.BlockHash, "diffLayer", diffLayerMar)
 
 	//json.MarshalIndent()
@@ -2108,13 +2108,11 @@ func (bc *BlockChain) insertChain(chain types.Blocks, verifySeals bool) (int, er
 
 	for ; block != nil && err == nil || err == ErrKnownBlock; block, err = it.next() {
 		if bc.validator.RemoteVerifyManager() != nil {
-			header := block.Header()
-			for !bc.Validator().RemoteVerifyManager().AncestorVerified(header) {
+			for !bc.Validator().RemoteVerifyManager().AncestorVerified(block.Header()) {
 				if bc.insertStopped() {
 					break
 				}
 				log.Info("block ancestor has not been verified", "number", block.Number(), "hash", block.Hash())
-				bc.Validator().RemoteVerifyManager().NewBlockVerifyTask(header)
 				time.Sleep(100 * time.Millisecond)
 			}
 		}
@@ -3226,7 +3224,7 @@ func (bc *BlockChain) GetRootByDiffHash(blockNumber uint64, blockHash common.Has
 				return &res
 			}
 
-			log.Info("calculate diffhash from verify node of block", "diffhash", hash, "blcokhash", blockHash)
+			log.Info("calculate diffhash from verify node of block", "diffhash", hash , "blcokhash", blockHash)
 			diff.DiffHash.Store(hash)
 		}
 
