@@ -305,7 +305,7 @@ func (vt *verifyTask) sendVerifyRequest(n int) {
 	}
 	// if has not valid peer, log warning.
 	if len(validPeers) == 0 {
-		log.Warn("there is no valid peer for block", vt.blockHeader.Number)
+		log.Warn("there is no valid peer for block", "number", vt.blockHeader.Number)
 		return
 	}
 
