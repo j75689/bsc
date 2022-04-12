@@ -199,12 +199,12 @@ func (vm *remoteVerifyManager) AncestorVerified(header *types.Header) bool {
 		return true
 	}
 	// check whether H-11 block is a empty block.
-	//if header.TxHash == types.EmptyRootHash {
-	//	log.Info("block is empty ", "number", header.Number.Uint64(), "hash", header.Hash())
-	//	parent := vm.bc.GetHeaderByHash(header.ParentHash)
-	//
-	//	return parent == nil || header.Root == parent.Root
-	//}
+	if header.TxHash == types.EmptyRootHash {
+		log.Info("block is empty ", "number", header.Number.Uint64(), "hash", header.Hash())
+		parent := vm.bc.GetHeaderByHash(header.ParentHash)
+
+		return parent == nil || header.Root == parent.Root
+	}
 	hash := header.Hash()
 	_, exist := vm.verifiedCache.Get(hash)
 	return exist
