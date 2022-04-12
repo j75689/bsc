@@ -272,7 +272,7 @@ func (vt *verifyTask) Start(verifyCh chan common.Hash) {
 					vt.compareRootHashAndMark(msg, verifyCh)
 				}
 			case types.StatusDiffHashMismatch, types.StatusImpossibleFork, types.StatusUnexpectedError:
-				vt.badPeers[msg.peerId] = struct{}{}
+				// vt.badPeers[msg.peerId] = struct{}{}
 				log.Info("peer is not available", "hash", msg.verifyResult.BlockHash, "number", msg.verifyResult.BlockNumber, "peer", msg.peerId, "reason", msg.verifyResult.Status.Msg)
 			case types.StatusBlockTooNew, types.StatusBlockNewer, types.StatusPossibleFork:
 				log.Info("return msg from peer %s for block %s is %s", msg.peerId, msg.verifyResult.BlockHash, msg.verifyResult.Status.Msg)
