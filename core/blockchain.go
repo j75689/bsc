@@ -3272,7 +3272,7 @@ func (bc *BlockChain) GenerateDiffLayer(blockHash common.Hash) (*types.DiffLayer
 
 	block := bc.GetBlockByHash(blockHash)
 	if block == nil {
-		return nil, fmt.Errorf("block not found, block number: %d, blockhash: %v", block.NumberU64(), blockHash)
+		return nil, fmt.Errorf("block not found, blockhash: %v", blockHash)
 	}
 
 	parent := bc.GetBlockByHash(block.ParentHash())
