@@ -18,7 +18,6 @@ package eth
 
 import (
 	"errors"
-	"github.com/ethereum/go-ethereum/log"
 	"math/big"
 	"sync"
 	"time"
@@ -30,6 +29,7 @@ import (
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/eth/protocols/snap"
 	"github.com/ethereum/go-ethereum/eth/protocols/trust"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p"
 )
 
@@ -285,7 +285,6 @@ func (ps *peerSet) waitDiffExtension(peer *eth.Peer) (*diff.Peer, error) {
 func (ps *peerSet) waitTrustExtension(peer *eth.Peer) (*trust.Peer, error) {
 	// If the peer does not support a compatible `trust`, don't wait
 	if !peer.RunningCap(trust.ProtocolName, trust.ProtocolVersions) {
-		log.Info("##running cap failed")
 		return nil, nil
 	}
 	// If the peer isn't verify node, don't register trust extension into eth protocol.

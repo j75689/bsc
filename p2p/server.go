@@ -285,7 +285,6 @@ func (f connFlag) String() string {
 
 func (c *conn) is(f connFlag) bool {
 	flags := connFlag(atomic.LoadInt32((*int32)(&c.flags)))
-	log.Info("conn", "flag", c.flags)
 	return flags&f != 0
 }
 
