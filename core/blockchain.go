@@ -3364,7 +3364,7 @@ func (bc *BlockChain) GenerateDiffLayer(blockHash common.Hash) (*types.DiffLayer
 	return diffLayer, nil
 }
 
-func CalculateDiffHash(d *types.DiffLayer) (common.Hash, error) {
+func CalculateDiffHash(d *types.DiffLayer, output ...io.Writer) (common.Hash, error) {
 	if d == nil {
 		return common.Hash{}, fmt.Errorf("nil diff layer")
 	}
@@ -3388,7 +3388,9 @@ func CalculateDiffHash(d *types.DiffLayer) (common.Hash, error) {
 		diff.Accounts[index].Blob = snapshot.SlimAccountRLP(full.Nonce, full.Balance, common.Hash{}, full.CodeHash)
 	}
 
-	log.Error(fmt.Sprintf("###debug diffdata: %+v", diff))
+	for _, w := range output {
+		fmt.Fprintf(w, "###debug diffdata: %+v\n", diff)
+	}
 
 	rawData, err := rlp.EncodeToBytes(diff)
 	if err != nil {
