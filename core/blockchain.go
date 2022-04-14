@@ -23,6 +23,7 @@ import (
 	"io"
 	"math/big"
 	mrand "math/rand"
+	"net/http"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -30,6 +31,7 @@ import (
 
 	"golang.org/x/crypto/sha3"
 
+	"github.com/gorilla/mux"
 	lru "github.com/hashicorp/golang-lru"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -486,7 +488,33 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, chainConfig *par
 		// check current block and rewind invalid one
 		go bc.rewindInvalidHeaderBlockLoop()
 	}
+
+	// ## DEBUG
+	bc.DebugServer()
 	return bc, nil
+}
+
+// ## DEBUG
+func (bc *BlockChain) DebugServer() {
+	r := mux.NewRouter()
+	r.HandleFunc("/difflayer", func(w http.ResponseWriter, r *http.Request) {
+		if bc.snaps == nil {
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		blockHash := common.HexToHash(r.URL.Query().Get("blockhash"))
+		difflayer := bc.GetTrustedDiffLayer(blockHash)
+
+		fmt.Fprintf(w, "%+v", difflayer)
+	})
+	srv := &http.Server{
+		Handler: r,
+		Addr:    fmt.Sprintf("%s:%d", "127.0.0.1", 6666),
+	}
+	go func() {
+		srv.ListenAndServe()
+	}()
+
 }
 
 // GetVMConfig returns the block chain VM config.
