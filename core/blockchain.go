@@ -3388,6 +3388,8 @@ func CalculateDiffHash(d *types.DiffLayer) (common.Hash, error) {
 		diff.Accounts[index].Blob = snapshot.SlimAccountRLP(full.Nonce, full.Balance, common.Hash{}, full.CodeHash)
 	}
 
+	log.Error(fmt.Sprintf("###debug diffdata: %+v", diff))
+
 	rawData, err := rlp.EncodeToBytes(diff)
 	if err != nil {
 		return common.Hash{}, fmt.Errorf("encode new diff error: %v", err)
