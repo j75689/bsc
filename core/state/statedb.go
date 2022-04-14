@@ -1594,7 +1594,7 @@ func (s *StateDB) GenerateDiffLayer() *types.DiffLayer {
 			if !obj.deleted {
 				s.snapMux.Lock()
 				// The storage root hasn't been intermediate, pass empty storage root here.
-				s.snapAccounts[obj.address] = snapshot.SlimAccountRLP(obj.data.Nonce, obj.data.Balance, common.Hash{}, obj.data.CodeHash)
+				s.snapAccounts[obj.address] = snapshot.SlimAccountRLP(obj.data.Nonce, obj.data.Balance, obj.data.Root, obj.data.CodeHash)
 				s.snapMux.Unlock()
 			}
 		}
