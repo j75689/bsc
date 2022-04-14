@@ -507,6 +507,23 @@ func (bc *BlockChain) DebugServer() {
 
 		fmt.Fprintf(w, "%+v", difflayer)
 	})
+	r.HandleFunc("/difflayer/accounts", func(w http.ResponseWriter, r *http.Request) {
+		if bc.snaps == nil {
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		blockHash := common.HexToHash(r.URL.Query().Get("blockhash"))
+		difflayer := bc.GetTrustedDiffLayer(blockHash)
+		for _, account := range difflayer.Accounts {
+			full, err := snapshot.FullAccount(account.Blob)
+			if err != nil {
+				fmt.Fprintln(w, err)
+				return
+			}
+			fmt.Fprintf(w, "addr: %s, data: %+v", account.Account, full)
+		}
+
+	})
 	srv := &http.Server{
 		Handler: r,
 		Addr:    fmt.Sprintf("%s:%d", "127.0.0.1", 6666),
