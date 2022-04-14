@@ -3388,9 +3388,22 @@ func CalculateDiffHash(d *types.DiffLayer, output ...io.Writer) (common.Hash, er
 		diff.Accounts[index].Blob = snapshot.SlimAccountRLP(full.Nonce, full.Balance, common.Hash{}, full.CodeHash)
 	}
 
-	for _, w := range output {
-		fmt.Fprintf(w, "###debug diffdata: %+v\n", diff)
+	for _, storage := range diff.Storages {
+
+		for _, w := range output {
+			fmt.Fprintf(w, "account: %s\n", storage.Account)
+		}
+
+		for i := range storage.Keys {
+			for _, w := range output {
+				fmt.Fprintf(w, "%d: key: %v, val: %v\n", i, []byte(storage.Keys[i]), storage.Vals[i])
+			}
+		}
 	}
+
+	// for _, w := range output {
+	// 	fmt.Fprintf(w, "###debug diffdata: %+v\n", diff)
+	// }
 
 	rawData, err := rlp.EncodeToBytes(diff)
 	if err != nil {
