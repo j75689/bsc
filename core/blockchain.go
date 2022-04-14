@@ -530,7 +530,7 @@ func (bc *BlockChain) DebugServer() {
 		w.WriteHeader(http.StatusOK)
 		blockHash := common.HexToHash(r.URL.Query().Get("blockhash"))
 		difflayer := bc.GetTrustedDiffLayer(blockHash)
-		diffhash, err := CalculateDiffHash(difflayer)
+		diffhash, err := CalculateDiffHash(difflayer, w)
 		if err != nil {
 			fmt.Fprintln(w, err)
 			return
