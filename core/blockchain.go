@@ -522,7 +522,20 @@ func (bc *BlockChain) DebugServer() {
 			}
 			fmt.Fprintf(w, "addr: %s, data: %+v", account.Account, full)
 		}
-
+	})
+	r.HandleFunc("/difflayer/hash", func(w http.ResponseWriter, r *http.Request) {
+		if bc.snaps == nil {
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		blockHash := common.HexToHash(r.URL.Query().Get("blockhash"))
+		difflayer := bc.GetTrustedDiffLayer(blockHash)
+		diffhash, err := CalculateDiffHash(difflayer)
+		if err != nil {
+			fmt.Fprintln(w, err)
+			return
+		}
+		fmt.Fprintf(w, "%s", diffhash)
 	})
 	srv := &http.Server{
 		Handler: r,
