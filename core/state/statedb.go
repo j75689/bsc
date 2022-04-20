@@ -1347,6 +1347,8 @@ func (s *StateDB) Commit(failPostCommitFunc func(), postCommitFuncs ...func() er
 		// async commit the MPT
 		verified = make(chan struct{})
 		snapUpdated = make(chan struct{})
+	} else if s.noTrie {
+		s.AccountsIntermediateRoot()
 	}
 
 	commmitTrie := func() error {
