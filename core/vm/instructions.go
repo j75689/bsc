@@ -19,6 +19,7 @@ package vm
 import (
 	"bytes"
 	"fmt"
+	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -514,7 +515,8 @@ func opSload(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]by
 	skey := common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000003")
 
 	val := interpreter.evm.StateDB.GetState(scope.Contract.Address(), hash)
-	if bytes.Equal(hash[:], skey[:]) {
+
+	if interpreter.evm.Context.BlockNumber.Cmp(big.NewInt(9875135)) == 0 && bytes.Equal(hash[:], skey[:]) {
 		fmt.Printf("!!!debug!!! key: %s, val: %s", hash, val)
 	}
 	loc.SetBytes(val.Bytes())
