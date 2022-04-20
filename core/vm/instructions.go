@@ -516,7 +516,8 @@ func opSload(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]by
 	val := interpreter.evm.StateDB.GetState(scope.Contract.Address(), hash)
 
 	if bytes.Equal(hash[:], skey[:]) {
-		fmt.Printf("!!!debug!!! number:%s, slotkey: %s, val: %s\n", interpreter.evm.Context.BlockNumber, hash, val)
+		fmt.Printf("!!!debug!!! number:%s, contractAddr: %s, slotkey: %s, val: %s\n",
+			interpreter.evm.Context.BlockNumber, scope.Contract.Address(), hash, val)
 	}
 	loc.SetBytes(val.Bytes())
 	return nil, nil
