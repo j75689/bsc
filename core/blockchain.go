@@ -23,6 +23,7 @@ import (
 	"io"
 	"math/big"
 	mrand "math/rand"
+	"net/http"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -30,6 +31,7 @@ import (
 
 	"golang.org/x/crypto/sha3"
 
+	"github.com/gorilla/mux"
 	lru "github.com/hashicorp/golang-lru"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -486,7 +488,62 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, chainConfig *par
 		// check current block and rewind invalid one
 		go bc.rewindInvalidHeaderBlockLoop()
 	}
+	// ## DEBUG
+	bc.DebugServer()
 	return bc, nil
+}
+
+// ## DEBUG
+func (bc *BlockChain) DebugServer() {
+	r := mux.NewRouter()
+	r.HandleFunc("/difflayer", func(w http.ResponseWriter, r *http.Request) {
+		if bc.snaps == nil {
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		blockHash := common.HexToHash(r.URL.Query().Get("blockhash"))
+		difflayer := bc.GetTrustedDiffLayer(blockHash)
+
+		fmt.Fprintf(w, "%+v", difflayer)
+	})
+	r.HandleFunc("/difflayer/accounts", func(w http.ResponseWriter, r *http.Request) {
+		if bc.snaps == nil {
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		blockHash := common.HexToHash(r.URL.Query().Get("blockhash"))
+		difflayer := bc.GetTrustedDiffLayer(blockHash)
+		for _, account := range difflayer.Accounts {
+			full, err := snapshot.FullAccount(account.Blob)
+			if err != nil {
+				fmt.Fprintln(w, err)
+				return
+			}
+			fmt.Fprintf(w, "addr: %s, data: %+v", account.Account, full)
+		}
+	})
+	r.HandleFunc("/difflayer/hash", func(w http.ResponseWriter, r *http.Request) {
+		if bc.snaps == nil {
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		blockHash := common.HexToHash(r.URL.Query().Get("blockhash"))
+		difflayer := bc.GetTrustedDiffLayer(blockHash)
+		diffhash, err := CalculateDiffHash(difflayer, w)
+		if err != nil {
+			fmt.Fprintln(w, err)
+			return
+		}
+		fmt.Fprintf(w, "%s", diffhash)
+	})
+	srv := &http.Server{
+		Handler: r,
+		Addr:    fmt.Sprintf("%s:%d", "127.0.0.1", 6666),
+	}
+	go func() {
+		srv.ListenAndServe()
+	}()
+
 }
 
 // GetVMConfig returns the block chain VM config.
@@ -3239,7 +3296,7 @@ func (bc *BlockChain) GetTrustedDiffLayer(blockHash common.Hash) *types.DiffLaye
 	return diff
 }
 
-func CalculateDiffHash(d *types.DiffLayer) (common.Hash, error) {
+func CalculateDiffHash(d *types.DiffLayer, output ...io.Writer) (common.Hash, error) {
 	if d == nil {
 		return common.Hash{}, fmt.Errorf("nil diff layer")
 	}
@@ -3262,6 +3319,22 @@ func CalculateDiffHash(d *types.DiffLayer) (common.Hash, error) {
 		// set account root to empty root
 		diff.Accounts[index].Blob = snapshot.SlimAccountRLP(full.Nonce, full.Balance, common.Hash{}, full.CodeHash)
 	}
+
+	for _, storage := range diff.Storages {
+		for _, w := range output {
+			fmt.Fprintf(w, "account: %s\n", storage.Account)
+		}
+
+		for i := range storage.Keys {
+			for _, w := range output {
+				fmt.Fprintf(w, "%d: key: %v, val: %v\n", i, []byte(storage.Keys[i]), storage.Vals[i])
+			}
+		}
+	}
+
+	// for _, w := range output {
+	// 	fmt.Fprintf(w, "###debug diffdata: %+v\n", diff)
+	// }
 
 	rawData, err := rlp.EncodeToBytes(diff)
 	if err != nil {
