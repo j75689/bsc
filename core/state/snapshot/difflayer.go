@@ -621,3 +621,11 @@ func (dl *diffLayer) StorageList(accountHash common.Hash) ([]common.Hash, bool) 
 	dl.memory += uint64(len(dl.storageList)*common.HashLength + common.HashLength)
 	return storageList, destructed
 }
+
+func (dl *diffLayer) SnapData() (map[common.Hash][]byte, map[common.Hash]map[common.Hash][]byte, map[common.Hash]struct{}) {
+	return dl.accountData, dl.storageData, dl.destructSet
+}
+
+type ExtMDiffLayer interface {
+	SnapData() (map[common.Hash][]byte, map[common.Hash]map[common.Hash][]byte, map[common.Hash]struct{})
+}

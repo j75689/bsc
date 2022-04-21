@@ -18,6 +18,7 @@
 package state
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"math/big"
@@ -1515,6 +1516,63 @@ func (s *StateDB) Commit(failPostCommitFunc func(), postCommitFuncs ...func() er
 						log.Warn("Failed to update snapshot tree", "from", parent, "to", s.expectedRoot, "err", err)
 					}
 
+					snap := s.snaps.Snapshot(s.expectedRoot)
+					if snap != nil {
+						diff, ok := snap.(snapshot.ExtMDiffLayer)
+						if ok {
+							accounts, storages, destructs := diff.SnapData()
+							if len(diffLayer.Destructs) != len(destructs) {
+								log.Error("destructSet length different", "expect", len(destructs), "actual", len(diffLayer.Destructs))
+							}
+							for _, addr := range diffLayer.Destructs {
+								if _, ok := destructs[addr.Hash()]; !ok {
+									log.Error("destructSet missing", "addr", addr)
+								}
+							}
+
+							if len(diffLayer.Accounts) != len(accounts) {
+								log.Error("AccountData length different", "expect", len(accounts), "actual", len(diffLayer.Accounts))
+							}
+							for _, account := range diffLayer.Accounts {
+								accountBlob, ok := accounts[account.Account.Hash()]
+								if !ok {
+									log.Error("accountData missing", "addr", account.Account)
+									continue
+								}
+								if !bytes.Equal(accountBlob, account.Blob) {
+									log.Error("accountData blob mismatch", "expect", accountBlob, "actual", account.Blob)
+								}
+							}
+
+							if len(diffLayer.Storages) != len(storages) {
+								log.Error("storageData length different", "expect", len(storages), "actual", len(diffLayer.Storages))
+							}
+							for _, account := range diffLayer.Storages {
+								storage, ok := storages[account.Account.Hash()]
+								if !ok {
+									log.Error("storageData missing", "addr", account.Account)
+									continue
+								}
+								if len(account.Keys) != len(storage) {
+									log.Error("storageData length different", "addr", account.Account, "expect", len(storage), "actual", len(account.Keys))
+								}
+								for i, keyStr := range account.Keys {
+									keyHash := common.BytesToHash([]byte(keyStr))
+									val, ok := storage[keyHash]
+									if !ok {
+										log.Error("storageKey missing", "addr", account.Account, "key", keyHash)
+										continue
+									}
+
+									if !bytes.Equal(val, account.Vals[i]) {
+										log.Error("storageVal mismatch", "addr", account.Account, "key", keyHash, "expect", val, "actual", account.Vals[i])
+									}
+								}
+							}
+							log.Info("!!!Verify DiffLayer Done!!!", "root", s.expectedRoot, "hash", s.BlockHash)
+						}
+					}
+
 					// Keep n diff layers in the memory
 					// - head layer is paired with HEAD state
 					// - head-1 layer is paired with HEAD-1 state
@@ -1550,8 +1608,6 @@ func (s *StateDB) Commit(failPostCommitFunc func(), postCommitFuncs ...func() er
 	root := s.stateRoot
 	if s.pipeCommit {
 		root = s.expectedRoot
-	} else {
-		s.snap, s.snapDestructs, s.snapAccounts, s.snapStorage = nil, nil, nil, nil
 	}
 
 	return root, diffLayer, nil
