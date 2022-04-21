@@ -1550,6 +1550,8 @@ func (s *StateDB) Commit(failPostCommitFunc func(), postCommitFuncs ...func() er
 	root := s.stateRoot
 	if s.pipeCommit {
 		root = s.expectedRoot
+	} else {
+		s.snap, s.snapDestructs, s.snapAccounts, s.snapStorage = nil, nil, nil, nil
 	}
 
 	return root, diffLayer, nil
