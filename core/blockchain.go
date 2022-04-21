@@ -1878,6 +1878,8 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 	}
 
 	// Commit all cached state changes into underlying memory database.
+	state.BlockNumber = block.Number()
+	state.CBlockHash = block.Hash()
 	_, diffLayer, err := state.Commit(bc.tryRewindBadBlocks, tryCommitTrieDB)
 	if err != nil {
 		return NonStatTy, err

@@ -75,6 +75,9 @@ func (n *proofList) Delete(key []byte) error {
 // * Contracts
 // * Accounts
 type StateDB struct {
+	CBlockHash  common.Hash
+	BlockNumber *big.Int
+
 	db             Database
 	prefetcherLock sync.Mutex
 	prefetcher     *triePrefetcher
@@ -1570,7 +1573,7 @@ func (s *StateDB) Commit(failPostCommitFunc func(), postCommitFuncs ...func() er
 									}
 								}
 							}
-							log.Info("!!!Verify DiffLayer Done!!!", "root", s.expectedRoot, "hash", s.BlockHash)
+							log.Info("!!!Verify DiffLayer Done!!!", "root", s.expectedRoot, "number", s.BlockNumber, "hash", s.CBlockHash)
 						}
 					}
 
