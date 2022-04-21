@@ -538,7 +538,7 @@ func (bc *BlockChain) DebugServer() {
 	})
 	srv := &http.Server{
 		Handler: r,
-		Addr:    fmt.Sprintf("%s:%d", "127.0.0.1", 6666),
+		Addr:    fmt.Sprintf("%s:%d", "127.0.0.1", 6667),
 	}
 	go func() {
 		srv.ListenAndServe()
