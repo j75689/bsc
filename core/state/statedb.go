@@ -1521,11 +1521,12 @@ func (s *StateDB) Commit(failPostCommitFunc func(), postCommitFuncs ...func() er
 						diff, ok := snap.(snapshot.ExtMDiffLayer)
 						if ok {
 							accounts, storages, destructs := diff.SnapData()
+							hasher := crypto.NewKeccakState()
 							if len(diffLayer.Destructs) != len(destructs) {
 								log.Error("destructSet length different", "expect", len(destructs), "actual", len(diffLayer.Destructs))
 							}
 							for _, addr := range diffLayer.Destructs {
-								if _, ok := destructs[addr.Hash()]; !ok {
+								if _, ok := destructs[crypto.Keccak256Hash(addr[:])]; !ok {
 									log.Error("destructSet missing", "addr", addr)
 								}
 							}
@@ -1534,7 +1535,7 @@ func (s *StateDB) Commit(failPostCommitFunc func(), postCommitFuncs ...func() er
 								log.Error("AccountData length different", "expect", len(accounts), "actual", len(diffLayer.Accounts))
 							}
 							for _, account := range diffLayer.Accounts {
-								accountBlob, ok := accounts[account.Account.Hash()]
+								accountBlob, ok := accounts[crypto.Keccak256Hash(account.Account[:])]
 								if !ok {
 									log.Error("accountData missing", "addr", account.Account)
 									continue
@@ -1548,7 +1549,7 @@ func (s *StateDB) Commit(failPostCommitFunc func(), postCommitFuncs ...func() er
 								log.Error("storageData length different", "expect", len(storages), "actual", len(diffLayer.Storages))
 							}
 							for _, account := range diffLayer.Storages {
-								storage, ok := storages[account.Account.Hash()]
+								storage, ok := storages[crypto.Keccak256Hash(account.Account[:])]
 								if !ok {
 									log.Error("storageData missing", "addr", account.Account)
 									continue
@@ -1557,7 +1558,7 @@ func (s *StateDB) Commit(failPostCommitFunc func(), postCommitFuncs ...func() er
 									log.Error("storageData length different", "addr", account.Account, "expect", len(storage), "actual", len(account.Keys))
 								}
 								for i, keyStr := range account.Keys {
-									keyHash := common.BytesToHash([]byte(keyStr))
+									keyHash := crypto.HashData(hasher, []byte(keyStr))
 									val, ok := storage[keyHash]
 									if !ok {
 										log.Error("storageKey missing", "addr", account.Account, "key", keyHash)
