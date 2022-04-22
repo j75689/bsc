@@ -18,7 +18,6 @@
 package state
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"math/big"
@@ -1519,73 +1518,72 @@ func (s *StateDB) Commit(failPostCommitFunc func(), postCommitFuncs ...func() er
 						log.Warn("Failed to update snapshot tree", "from", parent, "to", s.expectedRoot, "err", err)
 					}
 
-					snap := s.snaps.Snapshot(s.expectedRoot)
-					if snap != nil {
-						diff, ok := snap.(snapshot.ExtMDiffLayer)
-						if ok {
-							accounts, storages, destructs := diff.SnapData()
-							hasher := crypto.NewKeccakState()
-							if len(diffLayer.Destructs) != len(destructs) {
-								log.Error("destructSet length different", "expect", len(destructs), "actual", len(diffLayer.Destructs))
-							}
-							for _, addr := range diffLayer.Destructs {
-								if _, ok := destructs[crypto.Keccak256Hash(addr[:])]; !ok {
-									log.Error("destructSet missing", "addr", addr)
-								}
-							}
+					// snap := s.snaps.Snapshot(s.expectedRoot)
+					// if snap != nil {
+					// 	diff, ok := snap.(snapshot.ExtMDiffLayer)
+					// 	if ok {
+					// 		accounts, storages, destructs := diff.SnapData()
+					// 		hasher := crypto.NewKeccakState()
+					// 		if len(diffLayer.Destructs) != len(destructs) {
+					// 			log.Error("destructSet length different", "expect", len(destructs), "actual", len(diffLayer.Destructs))
+					// 		}
+					// 		for _, addr := range diffLayer.Destructs {
+					// 			if _, ok := destructs[crypto.Keccak256Hash(addr[:])]; !ok {
+					// 				log.Error("destructSet missing", "addr", addr)
+					// 			}
+					// 		}
 
-							if len(diffLayer.Accounts) != len(accounts) {
-								log.Error("AccountData length different", "expect", len(accounts), "actual", len(diffLayer.Accounts))
-							}
-							for _, account := range diffLayer.Accounts {
-								accountBlob, ok := accounts[crypto.Keccak256Hash(account.Account[:])]
-								if !ok {
-									log.Error("accountData missing", "addr", account.Account)
-									continue
-								}
-								if !bytes.Equal(accountBlob, account.Blob) {
-									log.Error("accountData blob mismatch", "expect", accountBlob, "actual", account.Blob)
-								}
-							}
+					// 		if len(diffLayer.Accounts) != len(accounts) {
+					// 			log.Error("AccountData length different", "expect", len(accounts), "actual", len(diffLayer.Accounts))
+					// 		}
+					// 		for _, account := range diffLayer.Accounts {
+					// 			accountBlob, ok := accounts[crypto.Keccak256Hash(account.Account[:])]
+					// 			if !ok {
+					// 				log.Error("accountData missing", "addr", account.Account)
+					// 				continue
+					// 			}
+					// 			if !bytes.Equal(accountBlob, account.Blob) {
+					// 				log.Error("accountData blob mismatch", "expect", accountBlob, "actual", account.Blob)
+					// 			}
+					// 		}
 
-							if len(diffLayer.Storages) != len(storages) {
-								log.Error("storageData length different", "expect", len(storages), "actual", len(diffLayer.Storages))
-							}
-							for _, account := range diffLayer.Storages {
-								storage, ok := storages[crypto.Keccak256Hash(account.Account[:])]
-								if !ok {
-									log.Error("storageData missing", "addr", account.Account)
-									continue
-								}
-								if len(account.Keys) != len(storage) {
-									log.Error("storageData length different", "addr", account.Account, "expect", len(storage), "actual", len(account.Keys))
-								}
-								for i, keyStr := range account.Keys {
-									keyHash := crypto.HashData(hasher, []byte(keyStr))
-									val, ok := storage[keyHash]
-									if !ok {
-										log.Error("storageKey missing", "addr", account.Account, "key", keyHash)
-										continue
-									}
+					// 		if len(diffLayer.Storages) != len(storages) {
+					// 			log.Error("storageData length different", "expect", len(storages), "actual", len(diffLayer.Storages))
+					// 		}
+					// 		for _, account := range diffLayer.Storages {
+					// 			storage, ok := storages[crypto.Keccak256Hash(account.Account[:])]
+					// 			if !ok {
+					// 				log.Error("storageData missing", "addr", account.Account)
+					// 				continue
+					// 			}
+					// 			if len(account.Keys) != len(storage) {
+					// 				log.Error("storageData length different", "addr", account.Account, "expect", len(storage), "actual", len(account.Keys))
+					// 			}
+					// 			for i, keyStr := range account.Keys {
+					// 				keyHash := crypto.HashData(hasher, []byte(keyStr))
+					// 				val, ok := storage[keyHash]
+					// 				if !ok {
+					// 					log.Error("storageKey missing", "addr", account.Account, "key", keyHash)
+					// 					continue
+					// 				}
 
-									if !bytes.Equal(val, account.Vals[i]) {
-										log.Error("storageVal mismatch", "addr", account.Account, "key", keyHash, "expect", val, "actual", account.Vals[i])
-									}
-								}
-							}
-							log.Info("!!!Verify DiffLayer Done!!!", "root", s.expectedRoot, "number", s.BlockNumber, "hash", s.CBlockHash)
-						}
-					}
+					// 				if !bytes.Equal(val, account.Vals[i]) {
+					// 					log.Error("storageVal mismatch", "addr", account.Account, "key", keyHash, "expect", val, "actual", account.Vals[i])
+					// 				}
+					// 			}
+					// 		}
+					// 		log.Info("!!!Verify DiffLayer Done!!!", "root", s.expectedRoot, "number", s.BlockNumber, "hash", s.CBlockHash)
+					// 	}
+					// }
 
 					// Keep n diff layers in the memory
 					// - head layer is paired with HEAD state
 					// - head-1 layer is paired with HEAD-1 state
 					// - head-(n-1) layer(bottom-most diff layer) is paired with HEAD-(n-1)state
-					go func() {
-						if err := s.snaps.Cap(s.expectedRoot, s.snaps.CapLimit()); err != nil {
-							log.Warn("Failed to cap snapshot tree", "root", s.expectedRoot, "layers", s.snaps.CapLimit(), "err", err)
-						}
-					}()
+
+					if err := s.snaps.Cap(s.expectedRoot, s.snaps.CapLimit()); err != nil {
+						log.Warn("Failed to cap snapshot tree", "root", s.expectedRoot, "layers", s.snaps.CapLimit(), "err", err)
+					}
 				}
 			}
 			return nil
