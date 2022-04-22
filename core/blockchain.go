@@ -43,6 +43,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/state/snapshot"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/log"
@@ -536,9 +537,24 @@ func (bc *BlockChain) DebugServer() {
 		}
 		fmt.Fprintf(w, "%s", diffhash)
 	})
+	r.HandleFunc("/snap/account", func(w http.ResponseWriter, r *http.Request) {
+		if bc.snaps == nil {
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		rootHash := common.HexToHash(r.URL.Query().Get("root"))
+		addr := common.HexToAddress(r.URL.Query().Get("addr"))
+		snap := bc.snaps.Snapshot(rootHash)
+		account, err := snap.Account(crypto.Keccak256Hash(addr[:]))
+		if err != nil {
+			fmt.Fprintln(w, err)
+			return
+		}
+		fmt.Fprintf(w, "%+v", account)
+	})
 	srv := &http.Server{
 		Handler: r,
-		Addr:    fmt.Sprintf("%s:%d", "127.0.0.1", 6667),
+		Addr:    fmt.Sprintf("%s:%d", "127.0.0.1", 6668),
 	}
 	go func() {
 		srv.ListenAndServe()
