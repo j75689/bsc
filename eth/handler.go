@@ -504,6 +504,7 @@ func (h *handler) runDiffExtension(peer *diff.Peer, handler diff.Handler) error 
 func (h *handler) removePeer(id string) {
 	peer := h.peers.peer(id)
 	if peer != nil {
+		// Hard disconnect at the networking layer. Handler will get an EOF and terminate the peer. defer unregisterPeer will do the cleanup task after then.
 		peer.Peer.Disconnect(p2p.DiscUselessPeer)
 	}
 }
