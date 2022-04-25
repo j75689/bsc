@@ -111,9 +111,9 @@ func (dl *diskLayer) AccountRLP(hash common.Hash) ([]byte, error) {
 
 	// If the layer was flattened into, consider it invalid (any live reference to
 	// the original should be marked as unusable).
-	if dl.stale {
-		return nil, ErrSnapshotStale
-	}
+	// if dl.stale {
+	// 	return nil, ErrSnapshotStale
+	// }
 	// If the layer is being generated, ensure the requested hash has already been
 	// covered by the generator.
 	if dl.genMarker != nil && bytes.Compare(hash[:], dl.genMarker) > 0 {
