@@ -1517,9 +1517,12 @@ func (s *StateDB) Commit(failPostCommitFunc func(), postCommitFuncs ...func() er
 					// - head layer is paired with HEAD state
 					// - head-1 layer is paired with HEAD-1 state
 					// - head-(n-1) layer(bottom-most diff layer) is paired with HEAD-(n-1)state
-					if err := s.snaps.Cap(s.expectedRoot, s.snaps.CapLimit()); err != nil {
-						log.Warn("Failed to cap snapshot tree", "root", s.expectedRoot, "layers", s.snaps.CapLimit(), "err", err)
-					}
+					go func(root common.Hash, limit int) {
+						if err := s.snaps.Cap(root, limit); err != nil {
+							log.Warn("Failed to cap snapshot tree", "root", s.expectedRoot, "layers", s.snaps.CapLimit(), "err", err)
+						}
+					}(s.expectedRoot, s.snaps.CapLimit())
+
 				}
 			}
 			return nil
