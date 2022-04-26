@@ -278,6 +278,7 @@ func (s *StateObject) GetCommittedState(db Database, key common.Hash) common.Has
 	}
 	// ErrSnapshotStale may occur due to diff layers in the update, so we should try again in noTrie mode.
 	if s.db.NoTrie() && err != nil && errors.Is(err, snapshot.ErrSnapshotStale) {
+		time.Sleep(diffLayerStaleRetryInterval)
 		return s.GetCommittedState(db, key)
 	}
 	// If snapshot unavailable or reading from it failed, load from the database

@@ -39,7 +39,10 @@ import (
 	"github.com/ethereum/go-ethereum/trie"
 )
 
-const defaultNumOfSlots = 100
+const (
+	defaultNumOfSlots           = 100
+	diffLayerStaleRetryInterval = time.Millisecond * 100
+)
 
 type revision struct {
 	id           int
@@ -677,6 +680,7 @@ func (s *StateDB) getDeletedStateObject(addr common.Address) *StateObject {
 
 	// ErrSnapshotStale may occur due to diff layers in the update, so we should try again in noTrie mode.
 	if s.NoTrie() && err != nil && errors.Is(err, snapshot.ErrSnapshotStale) {
+		time.Sleep(diffLayerStaleRetryInterval)
 		return s.getDeletedStateObject(addr)
 	}
 
