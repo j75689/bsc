@@ -74,7 +74,6 @@ func generatePreMergeChain(n int) (*core.Genesis, []*types.Block) {
 	config.TerminalTotalDifficulty = totalDifficulty
 	return genesis, blocks
 }
-
 func TestEth2AssembleBlock(t *testing.T) {
 	genesis, blocks := generatePreMergeChain(10)
 	n, ethservice := startEthService(t, genesis, blocks)
