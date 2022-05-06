@@ -481,11 +481,14 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, chainConfig *par
 	}
 	// Need persist and prune diff layer
 	if bc.db.DiffStore() != nil {
+		bc.wg.Add(1)
 		go bc.trustedDiffLayerLoop()
 	}
+	bc.wg.Add(1)
 	go bc.untrustedDiffLayerPruneLoop()
 	if bc.pipeCommit {
 		// check current block and rewind invalid one
+		bc.wg.Add(1)
 		go bc.rewindInvalidHeaderBlockLoop()
 	}
 	return bc, nil
@@ -2408,7 +2411,10 @@ func (bc *BlockChain) updateFutureBlocks() {
 
 func (bc *BlockChain) rewindInvalidHeaderBlockLoop() {
 	recheck := time.NewTicker(rewindBadBlockInterval)
-	defer recheck.Stop()
+	defer func() {
+		recheck.Stop()
+		bc.wg.Done()
+	}()
 	for {
 		select {
 		case <-recheck.C:
@@ -2421,10 +2427,9 @@ func (bc *BlockChain) rewindInvalidHeaderBlockLoop() {
 
 func (bc *BlockChain) trustedDiffLayerLoop() {
 	recheck := time.NewTicker(diffLayerFreezerRecheckInterval)
-	bc.wg.Add(1)
 	defer func() {
-		bc.wg.Done()
 		recheck.Stop()
+		bc.wg.Done()
 	}()
 	for {
 		select {
@@ -2554,10 +2559,9 @@ func (bc *BlockChain) removeDiffLayers(diffHash common.Hash) {
 
 func (bc *BlockChain) untrustedDiffLayerPruneLoop() {
 	recheck := time.NewTicker(diffLayerPruneRecheckInterval)
-	bc.wg.Add(1)
 	defer func() {
-		bc.wg.Done()
 		recheck.Stop()
+		bc.wg.Done()
 	}()
 	for {
 		select {

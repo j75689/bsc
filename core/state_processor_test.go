@@ -54,6 +54,7 @@ func TestStateProcessorErrors(t *testing.T) {
 			MuirGlacierBlock:    big.NewInt(0),
 			MirrorSyncBlock:     big.NewInt(0),
 			BrunoBlock:          big.NewInt(0),
+			EulerBlock:          big.NewInt(0),
 			BerlinBlock:         big.NewInt(0),
 			LondonBlock:         big.NewInt(0),
 			Ethash:              new(params.EthashConfig),
