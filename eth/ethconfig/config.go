@@ -82,6 +82,7 @@ var Defaults = Config{
 	TrieDirtyCache:          256,
 	TrieTimeout:             60 * time.Minute,
 	TriesInMemory:           128,
+	TriesVerifyMode:         core.LocalVerify,
 	SnapshotCache:           102,
 	DiffBlock:               uint64(86400),
 	Miner: miner.Config{
@@ -133,12 +134,15 @@ type Config struct {
 
 	// This can be set to list of enrtree:// URLs which will be queried for
 	// for nodes to connect to.
-	EthDiscoveryURLs  []string
-	SnapDiscoveryURLs []string
+	EthDiscoveryURLs   []string
+	SnapDiscoveryURLs  []string
+	TrustDiscoveryURLs []string
 
 	NoPruning           bool // Whether to disable pruning and flush everything to disk
 	DirectBroadcast     bool
 	DisableSnapProtocol bool //Whether disable snap protocol
+	DisableDiffProtocol bool //Whether disable diff protocol
+	EnableTrustProtocol bool //Whether enable trust protocol
 	DiffSync            bool // Whether support diff sync
 	PipeCommit          bool
 	RangeLimit          bool
@@ -178,6 +182,7 @@ type Config struct {
 	TrieTimeout             time.Duration
 	SnapshotCache           int
 	TriesInMemory           uint64
+	TriesVerifyMode         core.VerifyMode
 	Preimages               bool
 
 	// Mining options
