@@ -1335,6 +1335,10 @@ func (s *PublicBlockChainAPI) GetDiffAccountsWithScope(ctx context.Context, bloc
 	return result, err
 }
 
+func (s *PublicBlockChainAPI) GetVerifyResult(ctx context.Context, blockNr rpc.BlockNumber, blockHash common.Hash, diffHash common.Hash) *core.VerifyResult {
+	return s.b.Chain().GetVerifyResult(uint64(blockNr), blockHash, diffHash)
+}
+
 // ExecutionResult groups all structured logs emitted by the EVM
 // while replaying a transaction in debug mode as well as transaction
 // execution status, the amount of gas used and the return value
@@ -1845,9 +1849,15 @@ func (s *PublicTransactionPoolAPI) GetTransactionReceiptsByBlockNumber(ctx conte
 	if err != nil {
 		return nil, err
 	}
+	if receipts == nil {
+		return nil, fmt.Errorf("block %d receipts not found", blockNumber)
+	}
 	block, err := s.b.BlockByHash(ctx, blockHash)
 	if err != nil {
 		return nil, err
+	}
+	if block == nil {
+		return nil, fmt.Errorf("block %d not found", blockNumber)
 	}
 	txs := block.Transactions()
 	if len(txs) != len(receipts) {

@@ -28,6 +28,7 @@ import (
 	"time"
 
 	lru "github.com/hashicorp/golang-lru"
+	"golang.org/x/crypto/sha3"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/mclock"
@@ -133,15 +134,17 @@ const (
 // CacheConfig contains the configuration values for the trie caching/pruning
 // that's resident in a blockchain.
 type CacheConfig struct {
-	TrieCleanLimit     int           // Memory allowance (MB) to use for caching trie nodes in memory
-	TrieCleanJournal   string        // Disk journal for saving clean cache entries.
-	TrieCleanRejournal time.Duration // Time interval to dump clean cache to disk periodically
-	TrieDirtyLimit     int           // Memory limit (MB) at which to start flushing dirty trie nodes to disk
-	TrieDirtyDisabled  bool          // Whether to disable trie write caching and GC altogether (archive node)
-	TrieTimeLimit      time.Duration // Time limit after which to flush the current in-memory trie to disk
-	SnapshotLimit      int           // Memory allowance (MB) to use for caching snapshot entries in memory
-	Preimages          bool          // Whether to store preimage of trie key to the disk
-	TriesInMemory      uint64        // How many tries keeps in memory
+	TrieCleanLimit      int           // Memory allowance (MB) to use for caching trie nodes in memory
+	TrieCleanJournal    string        // Disk journal for saving clean cache entries.
+	TrieCleanRejournal  time.Duration // Time interval to dump clean cache to disk periodically
+	TrieCleanNoPrefetch bool          // Whether to disable heuristic state prefetching for followup blocks
+	TrieDirtyLimit      int           // Memory limit (MB) at which to start flushing dirty trie nodes to disk
+	TrieDirtyDisabled   bool          // Whether to disable trie write caching and GC altogether (archive node)
+	TrieTimeLimit       time.Duration // Time limit after which to flush the current in-memory trie to disk
+	SnapshotLimit       int           // Memory allowance (MB) to use for caching snapshot entries in memory
+	Preimages           bool          // Whether to store preimage of trie key to the disk
+	TriesInMemory       uint64        // How many tries keeps in memory
+	NoTries             bool          // Insecure settings. Do not have any tries in databases if enabled.
 
 	SnapshotWait bool // Wait for snapshot construction on startup. TODO(karalabe): This is a dirty hack for testing, nuke it
 }
@@ -162,7 +165,7 @@ var defaultCacheConfig = &CacheConfig{
 	SnapshotWait:   true,
 }
 
-type BlockChainOption func(*BlockChain) *BlockChain
+type BlockChainOption func(*BlockChain) (*BlockChain, error)
 
 // BlockChain represents the canonical chain given a database with a genesis
 // block. The Blockchain manages chain imports, reverts, chain reorganisations.
@@ -196,15 +199,16 @@ type BlockChain struct {
 	txLookupLimit uint64
 	triesInMemory uint64
 
-	hc            *HeaderChain
-	rmLogsFeed    event.Feed
-	chainFeed     event.Feed
-	chainSideFeed event.Feed
-	chainHeadFeed event.Feed
-	logsFeed      event.Feed
-	blockProcFeed event.Feed
-	scope         event.SubscriptionScope
-	genesisBlock  *types.Block
+	hc             *HeaderChain
+	rmLogsFeed     event.Feed
+	chainFeed      event.Feed
+	chainSideFeed  event.Feed
+	chainHeadFeed  event.Feed
+	chainBlockFeed event.Feed
+	logsFeed       event.Feed
+	blockProcFeed  event.Feed
+	scope          event.SubscriptionScope
+	genesisBlock   *types.Block
 
 	// This mutex synchronizes chain write operations.
 	// Readers don't need to take it, they can just read the database.
@@ -226,6 +230,7 @@ type BlockChain struct {
 	// trusted diff layers
 	diffLayerCache             *lru.Cache   // Cache for the diffLayers
 	diffLayerRLPCache          *lru.Cache   // Cache for the rlp encoded diffLayers
+	diffLayerChanCache         *lru.Cache   // Cache for the difflayer channel
 	diffQueue                  *prque.Prque // A Priority queue to store recent diff layer
 	diffQueueBuffer            chan *types.DiffLayer
 	diffLayerFreezerBlockLimit uint64
@@ -278,6 +283,7 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, chainConfig *par
 	futureBlocks, _ := lru.New(maxFutureBlocks)
 	diffLayerCache, _ := lru.New(diffLayerCacheLimit)
 	diffLayerRLPCache, _ := lru.New(diffLayerRLPCacheLimit)
+	diffLayerChanCache, _ := lru.New(diffLayerCacheLimit)
 
 	bc := &BlockChain{
 		chainConfig: chainConfig,
@@ -288,6 +294,7 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, chainConfig *par
 			Cache:     cacheConfig.TrieCleanLimit,
 			Journal:   cacheConfig.TrieCleanJournal,
 			Preimages: cacheConfig.Preimages,
+			NoTries:   cacheConfig.NoTries,
 		}),
 		triesInMemory:         cacheConfig.TriesInMemory,
 		quit:                  make(chan struct{}),
@@ -299,6 +306,7 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, chainConfig *par
 		badBlockCache:         badBlockCache,
 		diffLayerCache:        diffLayerCache,
 		diffLayerRLPCache:     diffLayerRLPCache,
+		diffLayerChanCache:    diffLayerChanCache,
 		txLookupCache:         txLookupCache,
 		futureBlocks:          futureBlocks,
 		engine:                engine,
@@ -311,6 +319,7 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, chainConfig *par
 		diffNumToBlockHashes:  make(map[uint64]map[common.Hash]struct{}),
 		diffPeersToDiffHashes: make(map[string]map[common.Hash]struct{}),
 	}
+
 	bc.prefetcher = NewStatePrefetcher(chainConfig, bc, engine)
 	bc.forker = NewForkChoice(bc, shouldPreserve)
 	bc.validator = NewBlockValidator(chainConfig, bc, engine)
@@ -447,11 +456,16 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, chainConfig *par
 			log.Warn("Enabling snapshot recovery", "chainhead", head.NumberU64(), "diskbase", *layer)
 			recover = true
 		}
-		bc.snaps, _ = snapshot.New(bc.db, bc.stateCache.TrieDB(), bc.cacheConfig.SnapshotLimit, int(bc.cacheConfig.TriesInMemory), head.Root(), !bc.cacheConfig.SnapshotWait, true, recover)
+		bc.snaps, _ = snapshot.New(bc.db, bc.stateCache.TrieDB(), bc.cacheConfig.SnapshotLimit, int(bc.cacheConfig.TriesInMemory), head.Root(), !bc.cacheConfig.SnapshotWait, true, recover, bc.stateCache.NoTries())
 	}
+	// write safe point block number
+	rawdb.WriteSafePointBlockNumber(bc.db, bc.CurrentBlock().NumberU64())
 	// do options before start any routine
 	for _, option := range options {
-		bc = option(bc)
+		bc, err = option(bc)
+		if err != nil {
+			return nil, err
+		}
 	}
 	// Start future block processor.
 	bc.wg.Add(1)
@@ -480,11 +494,14 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, chainConfig *par
 	}
 	// Need persist and prune diff layer
 	if bc.db.DiffStore() != nil {
+		bc.wg.Add(1)
 		go bc.trustedDiffLayerLoop()
 	}
+	bc.wg.Add(1)
 	go bc.untrustedDiffLayerPruneLoop()
 	if bc.pipeCommit {
 		// check current block and rewind invalid one
+		bc.wg.Add(1)
 		go bc.rewindInvalidHeaderBlockLoop()
 	}
 	return bc, nil
@@ -509,11 +526,35 @@ func (bc *BlockChain) cacheReceipts(hash common.Hash, receipts types.Receipts) {
 	bc.receiptsCache.Add(hash, receipts)
 }
 
-func (bc *BlockChain) cacheDiffLayer(diffLayer *types.DiffLayer) {
+func (bc *BlockChain) cacheDiffLayer(diffLayer *types.DiffLayer, diffLayerCh chan struct{}) {
+	// The difflayer in the system is stored by the map structure,
+	// so it will be out of order.
+	// It must be sorted first and then cached,
+	// otherwise the DiffHash calculated by different nodes will be inconsistent
+	sort.SliceStable(diffLayer.Codes, func(i, j int) bool {
+		return diffLayer.Codes[i].Hash.Hex() < diffLayer.Codes[j].Hash.Hex()
+	})
+	sort.SliceStable(diffLayer.Destructs, func(i, j int) bool {
+		return diffLayer.Destructs[i].Hex() < (diffLayer.Destructs[j].Hex())
+	})
+	sort.SliceStable(diffLayer.Accounts, func(i, j int) bool {
+		return diffLayer.Accounts[i].Account.Hex() < diffLayer.Accounts[j].Account.Hex()
+	})
+	sort.SliceStable(diffLayer.Storages, func(i, j int) bool {
+		return diffLayer.Storages[i].Account.Hex() < diffLayer.Storages[j].Account.Hex()
+	})
+	for index := range diffLayer.Storages {
+		// Sort keys and vals by key.
+		sort.Sort(&diffLayer.Storages[index])
+	}
+
 	if bc.diffLayerCache.Len() >= diffLayerCacheLimit {
 		bc.diffLayerCache.RemoveOldest()
 	}
+
 	bc.diffLayerCache.Add(diffLayer.BlockHash, diffLayer)
+	close(diffLayerCh)
+
 	if bc.db.DiffStore() != nil {
 		// push to priority queue before persisting
 		bc.diffQueueBuffer <- diffLayer
@@ -555,6 +596,7 @@ func (bc *BlockChain) loadLastState() error {
 		log.Warn("Head block missing, resetting chain", "hash", head)
 		return bc.Reset()
 	}
+
 	// Everything seems to be fine, set as the head block
 	bc.currentBlock.Store(currentBlock)
 	headBlockGauge.Update(int64(currentBlock.NumberU64()))
@@ -807,6 +849,11 @@ func (bc *BlockChain) SnapSyncCommitHead(hash common.Hash) error {
 	return nil
 }
 
+// StateAtWithSharedPool returns a new mutable state based on a particular point in time with sharedStorage
+func (bc *BlockChain) StateAtWithSharedPool(root common.Hash) (*state.StateDB, error) {
+	return state.NewWithSharedPool(root, bc.stateCache, bc.snaps)
+}
+
 // Reset purges the entire blockchain, restoring it to its genesis state.
 func (bc *BlockChain) Reset() error {
 	return bc.ResetWithGenesisBlock(bc.genesisBlock)
@@ -1029,6 +1076,8 @@ func (bc *BlockChain) Stop() {
 				log.Info("Writing cached state to disk", "block", recent.Number(), "hash", recent.Hash(), "root", recent.Root())
 				if err := triedb.Commit(recent.Root(), true, nil); err != nil {
 					log.Error("Failed to commit recent state trie", "err", err)
+				} else {
+					rawdb.WriteSafePointBlockNumber(bc.db, recent.NumberU64())
 				}
 			}
 		}
@@ -1036,6 +1085,8 @@ func (bc *BlockChain) Stop() {
 			log.Info("Writing snapshot state to disk", "root", snapBase)
 			if err := triedb.Commit(snapBase, true, nil); err != nil {
 				log.Error("Failed to commit recent state trie", "err", err)
+			} else {
+				rawdb.WriteSafePointBlockNumber(bc.db, bc.CurrentBlock().NumberU64())
 			}
 		}
 		for !bc.triegc.Empty() {
@@ -1473,6 +1524,7 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 							}
 							// Flush an entire trie and restart the counters
 							triedb.Commit(header.Root, true, nil)
+							rawdb.WriteSafePointBlockNumber(bc.db, chosen)
 							lastWrite = chosen
 							bc.gcproc = 0
 						}
@@ -1503,7 +1555,14 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 		diffLayer.Receipts = receipts
 		diffLayer.BlockHash = block.Hash()
 		diffLayer.Number = block.NumberU64()
-		bc.cacheDiffLayer(diffLayer)
+
+		diffLayerCh := make(chan struct{})
+		if bc.diffLayerChanCache.Len() >= diffLayerCacheLimit {
+			bc.diffLayerChanCache.RemoveOldest()
+		}
+		bc.diffLayerChanCache.Add(diffLayer.BlockHash, diffLayerCh)
+
+		go bc.cacheDiffLayer(diffLayer, diffLayerCh)
 	}
 	wg.Wait()
 	return nil
@@ -1819,7 +1878,7 @@ func (bc *BlockChain) insertChain(chain types.Blocks, verifySeals, setHead bool)
 		if parent == nil {
 			parent = bc.GetHeader(block.ParentHash(), block.NumberU64()-1)
 		}
-		statedb, err := state.New(parent.Root, bc.stateCache, bc.snaps)
+		statedb, err := state.NewWithSharedPool(parent.Root, bc.stateCache, bc.snaps)
 		if err != nil {
 			return it.index, err
 		}
@@ -1827,13 +1886,12 @@ func (bc *BlockChain) insertChain(chain types.Blocks, verifySeals, setHead bool)
 
 		// Enable prefetching to pull in trie node paths while processing transactions
 		statedb.StartPrefetcher("chain")
-		var followupInterrupt uint32
+		interruptCh := make(chan struct{})
 		// For diff sync, it may fallback to full sync, so we still do prefetch
 		if len(block.Transactions()) >= prefetchTxNumber {
 			throwaway := statedb.Copy()
-			go func(start time.Time, followup *types.Block, throwaway *state.StateDB, interrupt *uint32) {
-				bc.prefetcher.Prefetch(followup, throwaway, bc.vmConfig, &followupInterrupt)
-			}(time.Now(), block, throwaway, &followupInterrupt)
+			// do Prefetch in a separate goroutine to avoid blocking the critical path
+			go bc.prefetcher.Prefetch(block, throwaway, &bc.vmConfig, interruptCh)
 		}
 		//Process block using the parent state as reference point
 		substart := time.Now()
@@ -1842,7 +1900,7 @@ func (bc *BlockChain) insertChain(chain types.Blocks, verifySeals, setHead bool)
 		}
 		statedb.SetExpectedStateRoot(block.Root())
 		statedb, receipts, logs, usedGas, err := bc.processor.Process(block, statedb, bc.vmConfig)
-		atomic.StoreUint32(&followupInterrupt, 1)
+		close(interruptCh) // state prefetch can be stopped
 		activeState = statedb
 		if err != nil {
 			bc.reportBlock(block, receipts, err)
@@ -1861,7 +1919,7 @@ func (bc *BlockChain) insertChain(chain types.Blocks, verifySeals, setHead bool)
 		// Validate the state using the default validator
 		substart = time.Now()
 		if !statedb.IsLightProcessed() {
-			if err := bc.validator.ValidateState(block, statedb, receipts, usedGas, bc.pipeCommit); err != nil {
+			if err := bc.validator.ValidateState(block, statedb, receipts, usedGas); err != nil {
 				log.Error("validate state failed", "error", err)
 				bc.reportBlock(block, receipts, err)
 				return it.index, err
@@ -1932,6 +1990,7 @@ func (bc *BlockChain) insertChain(chain types.Blocks, verifySeals, setHead bool)
 		stats.processed++
 		stats.usedGas += usedGas
 
+		bc.chainBlockFeed.Send(ChainHeadEvent{block})
 		dirty, _ := bc.stateCache.TrieDB().Size()
 		stats.report(chain, it.index, dirty)
 	}
@@ -2088,6 +2147,9 @@ func (bc *BlockChain) insertSideChain(block *types.Block, it *insertIterator) (i
 	for i := len(hashes) - 1; i >= 0; i-- {
 		// Append the next block to our batch
 		block := bc.GetBlock(hashes[i], numbers[i])
+		if block == nil {
+			log.Crit("Importing heavy sidechain block is nil", "hash", hashes[i], "number", numbers[i])
+		}
 
 		blocks = append(blocks, block)
 		memory += block.Size()
@@ -2402,7 +2464,10 @@ func (bc *BlockChain) updateFutureBlocks() {
 
 func (bc *BlockChain) rewindInvalidHeaderBlockLoop() {
 	recheck := time.NewTicker(rewindBadBlockInterval)
-	defer recheck.Stop()
+	defer func() {
+		recheck.Stop()
+		bc.wg.Done()
+	}()
 	for {
 		select {
 		case <-recheck.C:
@@ -2415,10 +2480,9 @@ func (bc *BlockChain) rewindInvalidHeaderBlockLoop() {
 
 func (bc *BlockChain) trustedDiffLayerLoop() {
 	recheck := time.NewTicker(diffLayerFreezerRecheckInterval)
-	bc.wg.Add(1)
 	defer func() {
-		bc.wg.Done()
 		recheck.Stop()
+		bc.wg.Done()
 	}()
 	for {
 		select {
@@ -2548,10 +2612,9 @@ func (bc *BlockChain) removeDiffLayers(diffHash common.Hash) {
 
 func (bc *BlockChain) untrustedDiffLayerPruneLoop() {
 	recheck := time.NewTicker(diffLayerPruneRecheckInterval)
-	bc.wg.Add(1)
 	defer func() {
-		bc.wg.Done()
 		recheck.Stop()
+		bc.wg.Done()
 	}()
 	for {
 		select {
@@ -2621,9 +2684,14 @@ func (bc *BlockChain) HandleDiffLayer(diffLayer *types.DiffLayer, pid string, fu
 		return nil
 	}
 
+	if diffLayer.DiffHash.Load() == nil {
+		return fmt.Errorf("unexpected difflayer which diffHash is nil from peeer %s", pid)
+	}
+	diffHash := diffLayer.DiffHash.Load().(common.Hash)
+
 	bc.diffMux.Lock()
 	defer bc.diffMux.Unlock()
-	if blockHash, exist := bc.diffHashToBlockHash[diffLayer.DiffHash]; exist && blockHash == diffLayer.BlockHash {
+	if blockHash, exist := bc.diffHashToBlockHash[diffHash]; exist && blockHash == diffLayer.BlockHash {
 		return nil
 	}
 
@@ -2637,28 +2705,28 @@ func (bc *BlockChain) HandleDiffLayer(diffLayer *types.DiffLayer, pid string, fu
 		return nil
 	}
 	if _, exist := bc.diffPeersToDiffHashes[pid]; exist {
-		if _, alreadyHas := bc.diffPeersToDiffHashes[pid][diffLayer.DiffHash]; alreadyHas {
+		if _, alreadyHas := bc.diffPeersToDiffHashes[pid][diffHash]; alreadyHas {
 			return nil
 		}
 	} else {
 		bc.diffPeersToDiffHashes[pid] = make(map[common.Hash]struct{})
 	}
-	bc.diffPeersToDiffHashes[pid][diffLayer.DiffHash] = struct{}{}
+	bc.diffPeersToDiffHashes[pid][diffHash] = struct{}{}
 	if _, exist := bc.diffNumToBlockHashes[diffLayer.Number]; !exist {
 		bc.diffNumToBlockHashes[diffLayer.Number] = make(map[common.Hash]struct{})
 	}
 	bc.diffNumToBlockHashes[diffLayer.Number][diffLayer.BlockHash] = struct{}{}
 
-	if _, exist := bc.diffHashToPeers[diffLayer.DiffHash]; !exist {
-		bc.diffHashToPeers[diffLayer.DiffHash] = make(map[string]struct{})
+	if _, exist := bc.diffHashToPeers[diffHash]; !exist {
+		bc.diffHashToPeers[diffHash] = make(map[string]struct{})
 	}
-	bc.diffHashToPeers[diffLayer.DiffHash][pid] = struct{}{}
+	bc.diffHashToPeers[diffHash][pid] = struct{}{}
 
 	if _, exist := bc.blockHashToDiffLayers[diffLayer.BlockHash]; !exist {
 		bc.blockHashToDiffLayers[diffLayer.BlockHash] = make(map[common.Hash]*types.DiffLayer)
 	}
-	bc.blockHashToDiffLayers[diffLayer.BlockHash][diffLayer.DiffHash] = diffLayer
-	bc.diffHashToBlockHash[diffLayer.DiffHash] = diffLayer.BlockHash
+	bc.blockHashToDiffLayers[diffLayer.BlockHash][diffHash] = diffLayer
+	bc.diffHashToBlockHash[diffHash] = diffLayer.BlockHash
 
 	return nil
 }
@@ -2859,19 +2927,138 @@ func (bc *BlockChain) InsertHeaderChain(chain []*types.Header, checkFreq int) (i
 func (bc *BlockChain) TriesInMemory() uint64 { return bc.triesInMemory }
 
 // Options
-func EnableLightProcessor(bc *BlockChain) *BlockChain {
+func EnableLightProcessor(bc *BlockChain) (*BlockChain, error) {
 	bc.processor = NewLightStateProcessor(bc.Config(), bc, bc.engine)
-	return bc
+	return bc, nil
 }
 
-func EnablePipelineCommit(bc *BlockChain) *BlockChain {
+func EnablePipelineCommit(bc *BlockChain) (*BlockChain, error) {
 	bc.pipeCommit = true
-	return bc
+	return bc, nil
 }
 
 func EnablePersistDiff(limit uint64) BlockChainOption {
-	return func(chain *BlockChain) *BlockChain {
+	return func(chain *BlockChain) (*BlockChain, error) {
 		chain.diffLayerFreezerBlockLimit = limit
-		return chain
+		return chain, nil
 	}
+}
+
+func EnableBlockValidator(chainConfig *params.ChainConfig, engine consensus.Engine, mode VerifyMode, peers verifyPeers) BlockChainOption {
+	return func(bc *BlockChain) (*BlockChain, error) {
+		if mode.NeedRemoteVerify() {
+			vm, err := NewVerifyManager(bc, peers, mode == InsecureVerify)
+			if err != nil {
+				return nil, err
+			}
+			go vm.mainLoop()
+			bc.validator = NewBlockValidator(chainConfig, bc, engine, EnableRemoteVerifyManager(vm))
+		}
+		return bc, nil
+	}
+}
+
+func (bc *BlockChain) GetVerifyResult(blockNumber uint64, blockHash common.Hash, diffHash common.Hash) *VerifyResult {
+	var res VerifyResult
+	res.BlockNumber = blockNumber
+	res.BlockHash = blockHash
+
+	if blockNumber > bc.CurrentHeader().Number.Uint64()+maxDiffForkDist {
+		res.Status = types.StatusBlockTooNew
+		return &res
+	} else if blockNumber > bc.CurrentHeader().Number.Uint64() {
+		res.Status = types.StatusBlockNewer
+		return &res
+	}
+
+	header := bc.GetHeaderByHash(blockHash)
+	if header == nil {
+		if blockNumber > bc.CurrentHeader().Number.Uint64()-maxDiffForkDist {
+			res.Status = types.StatusPossibleFork
+			return &res
+		}
+
+		res.Status = types.StatusImpossibleFork
+		return &res
+	}
+
+	diff := bc.GetTrustedDiffLayer(blockHash)
+	if diff != nil {
+		if diff.DiffHash.Load() == nil {
+			hash, err := CalculateDiffHash(diff)
+			if err != nil {
+				res.Status = types.StatusUnexpectedError
+				return &res
+			}
+
+			diff.DiffHash.Store(hash)
+		}
+
+		if diffHash != diff.DiffHash.Load().(common.Hash) {
+			res.Status = types.StatusDiffHashMismatch
+			return &res
+		}
+
+		res.Status = types.StatusFullVerified
+		res.Root = header.Root
+		return &res
+	}
+
+	res.Status = types.StatusPartiallyVerified
+	res.Root = header.Root
+	return &res
+}
+
+func (bc *BlockChain) GetTrustedDiffLayer(blockHash common.Hash) *types.DiffLayer {
+	var diff *types.DiffLayer
+	if cached, ok := bc.diffLayerCache.Get(blockHash); ok {
+		diff = cached.(*types.DiffLayer)
+		return diff
+	}
+
+	diffStore := bc.db.DiffStore()
+	if diffStore != nil {
+		diff = rawdb.ReadDiffLayer(diffStore, blockHash)
+	}
+	return diff
+}
+
+func CalculateDiffHash(d *types.DiffLayer) (common.Hash, error) {
+	if d == nil {
+		return common.Hash{}, fmt.Errorf("nil diff layer")
+	}
+
+	diff := &types.ExtDiffLayer{
+		BlockHash: d.BlockHash,
+		Receipts:  make([]*types.ReceiptForStorage, 0),
+		Number:    d.Number,
+		Codes:     d.Codes,
+		Destructs: d.Destructs,
+		Accounts:  d.Accounts,
+		Storages:  d.Storages,
+	}
+
+	for index, account := range diff.Accounts {
+		full, err := snapshot.FullAccount(account.Blob)
+		if err != nil {
+			return common.Hash{}, fmt.Errorf("decode full account error: %v", err)
+		}
+		// set account root to empty root
+		diff.Accounts[index].Blob = snapshot.SlimAccountRLP(full.Nonce, full.Balance, common.Hash{}, full.CodeHash)
+	}
+
+	rawData, err := rlp.EncodeToBytes(diff)
+	if err != nil {
+		return common.Hash{}, fmt.Errorf("encode new diff error: %v", err)
+	}
+
+	hasher := sha3.NewLegacyKeccak256()
+	_, err = hasher.Write(rawData)
+	if err != nil {
+		return common.Hash{}, fmt.Errorf("hasher write error: %v", err)
+	}
+
+	var hash common.Hash
+	hasher.Sum(hash[:0])
+	return hash, nil
 }

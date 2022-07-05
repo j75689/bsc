@@ -174,7 +174,7 @@ func testFork(t *testing.T, blockchain *BlockChain, i, n int, full, pipeline boo
 	if full {
 		cur := blockchain.CurrentBlock()
 		tdPre = blockchain.GetTd(cur.Hash(), cur.NumberU64())
-		if err := testBlockChainImport(blockChainB, blockchain); err != nil {
+		if err := testBlockChainImport(blockChainB, pipeline, blockchain); err != nil {
 			t.Fatalf("failed to import forked block chain: %v", err)
 		}
 		last := blockChainB[len(blockChainB)-1]
@@ -220,7 +220,7 @@ func testBlockChainImport(chain types.Blocks, pipelineCommit bool, blockchain *B
 			blockchain.reportBlock(block, receipts, err)
 			return err
 		}
-		err = blockchain.validator.ValidateState(block, statedb, receipts, usedGas, pipelineCommit)
+		err = blockchain.validator.ValidateState(block, statedb, receipts, usedGas)
 		if err != nil {
 			blockchain.reportBlock(block, receipts, err)
 			return err
@@ -264,7 +264,7 @@ func TestBlockImportVerification(t *testing.T) {
 	}
 	defer processor.Stop()
 	// Start fork from current height
-	processor = EnablePipelineCommit(processor)
+	processor, _ = EnablePipelineCommit(processor)
 	testInvalidStateRootBlockImport(t, processor, length, 10, true)
 }
 
@@ -288,7 +288,7 @@ func TestLastBlock(t *testing.T) {
 // The chain is reorged to whatever specified.
 func testInsertAfterMerge(t *testing.T, blockchain *BlockChain, i, n int, full bool) {
 	// Copy old chain up to #i into a new db
-	db, blockchain2, err := newCanonical(ethash.NewFaker(), i, full)
+	db, blockchain2, err := newCanonical(ethash.NewFaker(), i, full, false)
 	if err != nil {
 		t.Fatal("could not make new canonical in testFork", err)
 	}
@@ -309,7 +309,7 @@ func testInsertAfterMerge(t *testing.T, blockchain *BlockChain, i, n int, full b
 
 	// Extend the newly created chain
 	if full {
-		blockChainB := makeBlockChain(blockchain2.CurrentBlock(), n, ethash.NewFaker(), db, forkSeed)
+		blockChainB := makeBlockChain(blockchain2.CurrentBlock(), n, ethash.NewFaker(), db, forkSeed1)
 		if _, err := blockchain2.InsertChain(blockChainB); err != nil {
 			t.Fatalf("failed to insert forking chain: %v", err)
 		}
@@ -320,7 +320,7 @@ func testInsertAfterMerge(t *testing.T, blockchain *BlockChain, i, n int, full b
 			t.Fatalf("failed to reorg to the given chain")
 		}
 	} else {
-		headerChainB := makeHeaderChain(blockchain2.CurrentHeader(), n, ethash.NewFaker(), db, forkSeed)
+		headerChainB := makeHeaderChain(blockchain2.CurrentHeader(), n, ethash.NewFaker(), db, forkSeed1)
 		if _, err := blockchain2.InsertHeaderChain(headerChainB, 1); err != nil {
 			t.Fatalf("failed to insert forking chain: %v", err)
 		}
@@ -376,7 +376,7 @@ func testExtendCanonicalAfterMerge(t *testing.T, full bool) {
 	length := 5
 
 	// Make first chain starting from genesis
-	_, processor, err := newCanonical(ethash.NewFaker(), length, full)
+	_, processor, err := newCanonical(ethash.NewFaker(), length, full, false)
 	if err != nil {
 		t.Fatalf("failed to make new canonical chain: %v", err)
 	}
@@ -428,7 +428,7 @@ func testShorterForkAfterMerge(t *testing.T, full bool) {
 	length := 10
 
 	// Make first chain starting from genesis
-	_, processor, err := newCanonical(ethash.NewFaker(), length, full)
+	_, processor, err := newCanonical(ethash.NewFaker(), length, full, false)
 	if err != nil {
 		t.Fatalf("failed to make new canonical chain: %v", err)
 	}
@@ -476,22 +476,22 @@ func testLongerFork(t *testing.T, full, pipeline bool) {
 func TestLongerForkHeadersAfterMerge(t *testing.T) { testLongerForkAfterMerge(t, false) }
 func TestLongerForkBlocksAfterMerge(t *testing.T)  { testLongerForkAfterMerge(t, true) }
 
-func testLongerForkAfterMerge(t *testing.T, full bool, pipeline,) {
+func testLongerForkAfterMerge(t *testing.T, full bool) {
 	length := 10
 
 	// Make first chain starting from genesis
-	_, processor, err := newCanonical(ethash.NewFaker(), length, full)
+	_, processor, err := newCanonical(ethash.NewFaker(), length, full, false)
 	if err != nil {
 		t.Fatalf("failed to make new canonical chain: %v", err)
 	}
 	defer processor.Stop()
 
-	testInsertAfterMerge(t, processor, 0, 11, pipeline,full)
-	testInsertAfterMerge(t, processor, 0, 15, pipeline, full)
-	testInsertAfterMerge(t, processor, 1, 10, pipeline, full)
-	testInsertAfterMerge(t, processor, 1, 12, pipeline, full)
-	testInsertAfterMerge(t, processor, 5, 6,pipeline, full)
-	testInsertAfterMerge(t, processor, 5, 8, pipeline,full)
+	testInsertAfterMerge(t, processor, 0, 11, full)
+	testInsertAfterMerge(t, processor, 0, 15, full)
+	testInsertAfterMerge(t, processor, 1, 10, full)
+	testInsertAfterMerge(t, processor, 1, 12, full)
+	testInsertAfterMerge(t, processor, 5, 6, full)
+	testInsertAfterMerge(t, processor, 5, 8, full)
 }
 
 // Tests that given a starting canonical chain of a given size, creating equal
@@ -500,7 +500,6 @@ func TestEqualForkHeaders(t *testing.T) { testEqualFork(t, false, false) }
 func TestEqualForkBlocks(t *testing.T) {
 	testEqualFork(t, true, true)
 	testEqualFork(t, true, false)
-
 }
 
 func testEqualFork(t *testing.T, full, pipeline bool) {
@@ -537,7 +536,7 @@ func testEqualForkAfterMerge(t *testing.T, full bool) {
 	length := 10
 
 	// Make first chain starting from genesis
-	_, processor, err := newCanonical(ethash.NewFaker(), length, full)
+	_, processor, err := newCanonical(ethash.NewFaker(), length, full, false)
 	if err != nil {
 		t.Fatalf("failed to make new canonical chain: %v", err)
 	}
@@ -612,7 +611,7 @@ func testReorgShort(t *testing.T, full, pipeline bool) {
 	for i := 0; i < len(diff); i++ {
 		diff[i] = -9
 	}
-	testReorg(t, easy, diff, 12615120+params.GenesisDifficulty.Int64(), full,pipeline)
+	testReorg(t, easy, diff, 12615120+params.GenesisDifficulty.Int64(), full, pipeline)
 }
 
 func testReorg(t *testing.T, first, second []int64, td int64, full, pipeline bool) {
@@ -689,7 +688,6 @@ func TestBadHeaderHashes(t *testing.T) { testBadHashes(t, false, false) }
 func TestBadBlockHashes(t *testing.T) {
 	testBadHashes(t, true, true)
 	testBadHashes(t, true, false)
-
 }
 
 func testBadHashes(t *testing.T, full, pipeline bool) {
@@ -727,7 +725,6 @@ func TestReorgBadHeaderHashes(t *testing.T) { testReorgBadHashes(t, false, false
 func TestReorgBadBlockHashes(t *testing.T) {
 	testReorgBadHashes(t, true, false)
 	testReorgBadHashes(t, true, true)
-
 }
 
 func testReorgBadHashes(t *testing.T, full, pipeline bool) {
@@ -906,7 +903,7 @@ func TestFastVsFullChains(t *testing.T) {
 		t.Fatalf("failed to create temp freezer dir: %v", err)
 	}
 	defer os.Remove(frdir)
-	ancientDb, err := rawdb.NewDatabaseWithFreezer(rawdb.NewMemoryDatabase(), frdir, "", false, false, false)
+	ancientDb, err := rawdb.NewDatabaseWithFreezer(rawdb.NewMemoryDatabase(), frdir, "", false, false, false, false)
 	if err != nil {
 		t.Fatalf("failed to create temp freezer db: %v", err)
 	}
@@ -1002,7 +999,7 @@ func TestLightVsFastVsFullChainHeads(t *testing.T) {
 			t.Fatalf("failed to create temp freezer dir: %v", err)
 		}
 		defer os.Remove(dir)
-		db, err := rawdb.NewDatabaseWithFreezer(rawdb.NewMemoryDatabase(), dir, "", false, false, false)
+		db, err := rawdb.NewDatabaseWithFreezer(rawdb.NewMemoryDatabase(), dir, "", false, false, false, false)
 		if err != nil {
 			t.Fatalf("failed to create temp freezer db: %v", err)
 		}
@@ -1758,7 +1755,7 @@ func TestTrieForkGC(t *testing.T) {
 
 	db := rawdb.NewMemoryDatabase()
 	genesis := (&Genesis{BaseFee: big.NewInt(params.InitialBaseFee)}).MustCommit(db)
-	blocks, _ := GenerateChain(params.TestChainConfig, genesis, engine, db, 2*TestTriesInMemory,, func(i int, b *BlockGen) { b.SetCoinbase(common.Address{1}) })
+	blocks, _ := GenerateChain(params.TestChainConfig, genesis, engine, db, 2*TestTriesInMemory, func(i int, b *BlockGen) { b.SetCoinbase(common.Address{1}) })
 
 	// Generate a bunch of fork blocks, each side forking from the canonical chain
 	forks := make([]*types.Block, len(blocks))
@@ -1869,7 +1866,7 @@ func TestBlockchainRecovery(t *testing.T) {
 	}
 	defer os.Remove(frdir)
 
-	ancientDb, err := rawdb.NewDatabaseWithFreezer(rawdb.NewMemoryDatabase(), frdir, "", false, false, false)
+	ancientDb, err := rawdb.NewDatabaseWithFreezer(rawdb.NewMemoryDatabase(), frdir, "", false, false, false, false)
 	if err != nil {
 		t.Fatalf("failed to create temp freezer db: %v", err)
 	}
@@ -1940,7 +1937,7 @@ func TestInsertReceiptChainRollback(t *testing.T) {
 		t.Fatalf("failed to create temp freezer dir: %v", err)
 	}
 	defer os.Remove(frdir)
-	ancientDb, err := rawdb.NewDatabaseWithFreezer(rawdb.NewMemoryDatabase(), frdir, "", false, false, false)
+	ancientDb, err := rawdb.NewDatabaseWithFreezer(rawdb.NewMemoryDatabase(), frdir, "", false, false, false, false)
 	if err != nil {
 		t.Fatalf("failed to create temp freezer db: %v", err)
 	}
@@ -2071,7 +2068,7 @@ func testSideImport(t *testing.T, numCanonBlocksInSidechain, blocksBetweenCommon
 		genesis, _ = gspec.Commit(db)
 	)
 	// Generate and import the canonical chain
-	blocks, _ := GenerateChain(params.TestChainConfig, genesis, engine, db, 2*TestTriesInMemory, nil)
+	GenerateChain(params.TestChainConfig, genesis, genEngine, db, 2*TestTriesInMemory, nil)
 	diskdb := rawdb.NewMemoryDatabase()
 	gspec.MustCommit(diskdb)
 	chain, err := NewBlockChain(diskdb, nil, &chainConfig, runEngine, vm.Config{}, nil, nil)
@@ -2086,7 +2083,7 @@ func testSideImport(t *testing.T, numCanonBlocksInSidechain, blocksBetweenCommon
 		// Set the terminal total difficulty in the config
 		gspec.Config.TerminalTotalDifficulty = big.NewInt(0)
 	}
-	blocks, _ := GenerateChain(&chainConfig, genesis, genEngine, db, 2*TriesInMemory, func(i int, gen *BlockGen) {
+	blocks, _ := GenerateChain(&chainConfig, genesis, genEngine, db, 2*TestTriesInMemory, func(i int, gen *BlockGen) {
 		tx, err := types.SignTx(types.NewTransaction(nonce, common.HexToAddress("deadbeef"), big.NewInt(100), 21000, big.NewInt(int64(i+1)*params.GWei), nil), signer, key)
 		if err != nil {
 			t.Fatalf("failed to create tx: %v", err)
@@ -2126,7 +2123,7 @@ func testSideImport(t *testing.T, numCanonBlocksInSidechain, blocksBetweenCommon
 	// Generate fork chain, make it longer than canon
 	parentIndex := lastPrunedIndex + blocksBetweenCommonAncestorAndPruneblock
 	parent := blocks[parentIndex]
-	fork, _ := GenerateChain(&chainConfig, parent, genEngine, db, 2*TriesInMemory, func(i int, b *BlockGen) {
+	fork, _ := GenerateChain(&chainConfig, parent, genEngine, db, 2*TestTriesInMemory, func(i int, b *BlockGen) {
 		b.SetCoinbase(common.Address{2})
 	})
 	// Prepend the parent(s)
@@ -2206,7 +2203,7 @@ func testInsertKnownChainData(t *testing.T, typ string) {
 		t.Fatalf("failed to create temp freezer dir: %v", err)
 	}
 	defer os.Remove(dir)
-	chaindb, err := rawdb.NewDatabaseWithFreezer(rawdb.NewMemoryDatabase(), dir, "", false, false, false)
+	chaindb, err := rawdb.NewDatabaseWithFreezer(rawdb.NewMemoryDatabase(), dir, "", false, false, false, false)
 	if err != nil {
 		t.Fatalf("failed to create temp freezer db: %v", err)
 	}
@@ -2370,7 +2367,7 @@ func testInsertKnownChainDataWithMerging(t *testing.T, typ string, mergeHeight i
 		t.Fatalf("failed to create temp freezer dir: %v", err)
 	}
 	defer os.Remove(dir)
-	chaindb, err := rawdb.NewDatabaseWithFreezer(rawdb.NewMemoryDatabase(), dir, "", false)
+	chaindb, err := rawdb.NewDatabaseWithFreezer(rawdb.NewMemoryDatabase(), dir, "", false, false, false, false)
 	if err != nil {
 		t.Fatalf("failed to create temp freezer db: %v", err)
 	}
@@ -2680,7 +2677,7 @@ func TestTransactionIndices(t *testing.T) {
 		t.Fatalf("failed to create temp freezer dir: %v", err)
 	}
 	defer os.Remove(frdir)
-	ancientDb, err := rawdb.NewDatabaseWithFreezer(rawdb.NewMemoryDatabase(), frdir, "", false, false, false)
+	ancientDb, err := rawdb.NewDatabaseWithFreezer(rawdb.NewMemoryDatabase(), frdir, "", false, false, false, false)
 	if err != nil {
 		t.Fatalf("failed to create temp freezer db: %v", err)
 	}
@@ -2708,7 +2705,7 @@ func TestTransactionIndices(t *testing.T) {
 	// Init block chain with external ancients, check all needed indices has been indexed.
 	limit := []uint64{0, 32, 64, 128}
 	for _, l := range limit {
-		ancientDb, err = rawdb.NewDatabaseWithFreezer(rawdb.NewMemoryDatabase(), frdir, "", false, false, false)
+		ancientDb, err = rawdb.NewDatabaseWithFreezer(rawdb.NewMemoryDatabase(), frdir, "", false, false, false, false)
 		if err != nil {
 			t.Fatalf("failed to create temp freezer db: %v", err)
 		}
@@ -2728,7 +2725,7 @@ func TestTransactionIndices(t *testing.T) {
 	}
 
 	// Reconstruct a block chain which only reserves HEAD-64 tx indices
-	ancientDb, err = rawdb.NewDatabaseWithFreezer(rawdb.NewMemoryDatabase(), frdir, "", false, false, false)
+	ancientDb, err = rawdb.NewDatabaseWithFreezer(rawdb.NewMemoryDatabase(), frdir, "", false, false, false, false)
 	if err != nil {
 		t.Fatalf("failed to create temp freezer db: %v", err)
 	}
@@ -2807,7 +2804,7 @@ func TestSkipStaleTxIndicesInSnapSync(t *testing.T) {
 		t.Fatalf("failed to create temp freezer dir: %v", err)
 	}
 	defer os.Remove(frdir)
-	ancientDb, err := rawdb.NewDatabaseWithFreezer(rawdb.NewMemoryDatabase(), frdir, "", false, false, false)
+	ancientDb, err := rawdb.NewDatabaseWithFreezer(rawdb.NewMemoryDatabase(), frdir, "", false, false, false, false)
 	if err != nil {
 		t.Fatalf("failed to create temp freezer db: %v", err)
 	}

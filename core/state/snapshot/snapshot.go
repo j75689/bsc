@@ -107,12 +107,22 @@ type Snapshot interface {
 	// Verified returns whether the snapshot is verified
 	Verified() bool
 
-	// Store the verification result
+	// MarkValid stores the verification result
 	MarkValid()
+
+	// CorrectAccounts updates account data for storing the correct data during pipecommit
+	CorrectAccounts(map[common.Hash][]byte)
+
+	// AccountsCorrected checks whether the account data has been corrected during pipecommit
+	AccountsCorrected() bool
 
 	// Account directly retrieves the account associated with a particular hash in
 	// the snapshot slim data format.
 	Account(hash common.Hash) (*Account, error)
+
+	// Accounts directly retrieves all accounts in current snapshot in
+	// the snapshot slim data format.
+	Accounts() (map[common.Hash]*Account, error)
 
 	// AccountRLP directly retrieves the account RLP associated with a particular
 	// hash in the snapshot slim data format.
@@ -182,18 +192,12 @@ type Tree struct {
 // store (with a number of memory layers from a journal), ensuring that the head
 // of the snapshot matches the expected one.
 //
-// If the snapshot is missing or the disk layer is broken, the snapshot will be
-// reconstructed using both the existing data and the state trie.
-// The repair happens on a background thread.
-//
-// If the memory layers in the journal do not match the disk layer (e.g. there is
-// a gap) or the journal is missing, there are two repair cases:
-//
-// - if the 'recovery' parameter is true, all memory diff-layers will be discarded.
-//   This case happens when the snapshot is 'ahead' of the state trie.
-// - otherwise, the entire snapshot is considered invalid and will be recreated on
-//   a background thread.
-func New(diskdb ethdb.KeyValueStore, triedb *trie.Database, cache, cap int, root common.Hash, async bool, rebuild bool, recovery bool) (*Tree, error) {
+// If the snapshot is missing or the disk layer is broken, the entire is deleted
+// and will be reconstructed from scratch based on the tries in the key-value
+// store, on a background thread. If the memory layers from the journal is not
+// continuous with disk layer or the journal is missing, all diffs will be discarded
+// iff it's in "recovery" mode, otherwise rebuild is mandatory.
+func New(diskdb ethdb.KeyValueStore, triedb *trie.Database, cache, cap int, root common.Hash, async bool, rebuild bool, recovery, withoutTrie bool) (*Tree, error) {
 	// Create a new, empty snapshot tree
 	snap := &Tree{
 		diskdb:   diskdb,
@@ -206,7 +210,7 @@ func New(diskdb ethdb.KeyValueStore, triedb *trie.Database, cache, cap int, root
 		defer snap.waitBuild()
 	}
 	// Attempt to load a previously persisted snapshot and rebuild one if failed
-	head, disabled, err := loadSnapshot(diskdb, triedb, cache, root, recovery)
+	head, disabled, err := loadSnapshot(diskdb, triedb, cache, root, recovery, withoutTrie)
 	if disabled {
 		log.Warn("Snapshot maintenance disabled (syncing)")
 		return snap, nil
@@ -247,6 +251,11 @@ func (t *Tree) waitBuild() {
 	if done != nil {
 		<-done
 	}
+}
+
+// Layers returns the number of layers
+func (t *Tree) Layers() int {
+	return len(t.layers)
 }
 
 // Disable interrupts any pending snapshot generator, deletes all the snapshot
@@ -682,6 +691,11 @@ func (t *Tree) Journal(root common.Hash) (common.Hash, error) {
 	if snap == nil {
 		return common.Hash{}, fmt.Errorf("snapshot [%#x] missing", root)
 	}
+	// Wait the snapshot(difflayer) is verified, it means the account data also been refreshed with the correct data
+	if !snap.WaitAndGetVerifyRes() {
+		return common.Hash{}, ErrSnapshotStale
+	}
+
 	// Run the journaling
 	t.lock.Lock()
 	defer t.lock.Unlock()

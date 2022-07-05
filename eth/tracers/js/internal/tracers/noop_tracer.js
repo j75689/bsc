@@ -1,4 +1,4 @@
-// Copyright 2021 The go-ethereum Authors
+// Copyright 2017 The go-ethereum Authors
 // This file is part of the go-ethereum library.
 //
 // The go-ethereum library is free software: you can redistribute it and/or modify
@@ -14,15 +14,16 @@
 // You should have received a copy of the GNU Lesser General Public License
 // along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
-package state
+// noopTracer is just the barebone boilerplate code required from a JavaScript
+// object to be usable as a transaction tracer.
+{
+	// step is invoked for every opcode that the VM executes.
+	step: function(log, db) { },
 
-import "github.com/ethereum/go-ethereum/metrics"
+	// fault is invoked when the actual execution of an opcode fails.
+	fault: function(log, db) { },
 
-var (
-	accountUpdatedMeter   = metrics.NewRegisteredMeter("state/update/account", nil)
-	storageUpdatedMeter   = metrics.NewRegisteredMeter("state/update/storage", nil)
-	accountDeletedMeter   = metrics.NewRegisteredMeter("state/delete/account", nil)
-	storageDeletedMeter   = metrics.NewRegisteredMeter("state/delete/storage", nil)
-	accountCommittedMeter = metrics.NewRegisteredMeter("state/commit/account", nil)
-	storageCommittedMeter = metrics.NewRegisteredMeter("state/commit/storage", nil)
-)
+	// result is invoked when all the opcodes have been iterated over and returns
+	// the final result of the tracing.
+	result: function(ctx, db) { return {}; }
+}

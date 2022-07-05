@@ -29,12 +29,14 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/beacon"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/forkid"
+	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/downloader"
 	"github.com/ethereum/go-ethereum/eth/fetcher"
 	"github.com/ethereum/go-ethereum/eth/protocols/diff"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/eth/protocols/snap"
+	"github.com/ethereum/go-ethereum/eth/protocols/trust"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/log"
@@ -96,6 +98,7 @@ type handlerConfig struct {
 	Whitelist              map[uint64]common.Hash    // Hard coded whitelist for sync challenged
 	DirectBroadcast        bool
 	DisablePeerTxBroadcast bool
+	PeerSet                *peerSet
 }
 
 type handler struct {
@@ -145,6 +148,9 @@ func newHandler(config *handlerConfig) (*handler, error) {
 	if config.EventMux == nil {
 		config.EventMux = new(event.TypeMux) // Nicety initialization for tests
 	}
+	if config.PeerSet == nil {
+		config.PeerSet = newPeerSet() // Nicety initialization for tests
+	}
 	h := &handler{
 		networkID:              config.Network,
 		forkFilter:             forkid.NewFilter(config.Chain),
@@ -153,7 +159,7 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		database:               config.Database,
 		txpool:                 config.TxPool,
 		chain:                  config.Chain,
-		peers:                  newPeerSet(),
+		peers:                  config.PeerSet,
 		merger:                 config.Merger,
 		whitelist:              config.Whitelist,
 		directBroadcast:        config.DirectBroadcast,
@@ -171,6 +177,9 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		// In these cases however it's safe to reenable snap sync.
 		fullBlock, fastBlock := h.chain.CurrentBlock(), h.chain.CurrentFastBlock()
 		if fullBlock.NumberU64() == 0 && fastBlock.NumberU64() > 0 {
+			if rawdb.ReadAncientType(h.database) == rawdb.PruneFreezerType {
+				log.Crit("Fast Sync not finish, can't enable pruneancient mode")
+			}
 			h.snapSync = uint32(1)
 			log.Warn("Switch sync mode from full sync to snap sync")
 		}
@@ -311,6 +320,11 @@ func (h *handler) runEthPeer(peer *eth.Peer, handler eth.Handler) error {
 		peer.Log().Error("Diff extension barrier failed", "err", err)
 		return err
 	}
+	trust, err := h.peers.waitTrustExtension(peer)
+	if err != nil {
+		peer.Log().Error("Trust extension barrier failed", "err", err)
+		return err
+	}
 	// TODO(karalabe): Not sure why this is needed
 	if !h.chainSync.handlePeerEvent(peer) {
 		return p2p.DiscQuitting
@@ -351,7 +365,7 @@ func (h *handler) runEthPeer(peer *eth.Peer, handler eth.Handler) error {
 	peer.Log().Debug("Ethereum peer connected", "name", peer.Name())
 
 	// Register the peer locally
-	if err := h.peers.registerPeer(peer, snap, diff); err != nil {
+	if err := h.peers.registerPeer(peer, snap, diff, trust); err != nil {
 		peer.Log().Error("Ethereum peer registration failed", "err", err)
 		return err
 	}
@@ -500,10 +514,26 @@ func (h *handler) runDiffExtension(peer *diff.Peer, handler diff.Handler) error 
 	return handler(peer)
 }
 
+// runTrustExtension registers a `trust` peer into the joint eth/trust peerset and
+// starts handling inbound messages. As `trust` is only a satellite protocol to
+// `eth`, all subsystem registrations and lifecycle management will be done by
+// the main `eth` handler to prevent strange races.
+func (h *handler) runTrustExtension(peer *trust.Peer, handler trust.Handler) error {
+	h.peerWG.Add(1)
+	defer h.peerWG.Done()
+
+	if err := h.peers.registerTrustExtension(peer); err != nil {
+		peer.Log().Error("Trust extension registration failed", "err", err)
+		return err
+	}
+	return handler(peer)
+}
+
 // removePeer requests disconnection of a peer.
 func (h *handler) removePeer(id string) {
 	peer := h.peers.peer(id)
 	if peer != nil {
+		// Hard disconnect at the networking layer. Handler will get an EOF and terminate the peer. defer unregisterPeer will do the cleanup task after then.
 		peer.Peer.Disconnect(p2p.DiscUselessPeer)
 	}
 }

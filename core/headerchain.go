@@ -294,7 +294,7 @@ func (hc *HeaderChain) writeHeadersAndSetHead(headers []*types.Header, forker *F
 		return result, nil
 	}
 	// Special case, all the inserted headers are already on the canonical
-	// header chain, skip the reorg operation.
+	// heaeder chain, skip the reorg operation.
 	if hc.GetCanonicalHash(lastHeader.Number.Uint64()) == lastHash && lastHeader.Number.Uint64() <= hc.CurrentHeader().Number.Uint64() {
 		return result, nil
 	}

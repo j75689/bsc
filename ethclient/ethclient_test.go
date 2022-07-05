@@ -185,7 +185,7 @@ func TestToFilterArg(t *testing.T) {
 var (
 	testKey, _   = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
 	testAddr     = crypto.PubkeyToAddress(testKey.PublicKey)
-	testBalance  = big.NewInt(2e10)
+	testBalance  = big.NewInt(2e15)
 	testBlockNum = 128
 	testBlocks   = []testBlockParam{
 		{
@@ -199,7 +199,7 @@ var (
 				{
 					to:       common.Address{0x01},
 					value:    big.NewInt(1),
-					gasPrice: big.NewInt(1),
+					gasPrice: big.NewInt(params.InitialBaseFee),
 					data:     nil,
 				},
 			},
@@ -210,13 +210,13 @@ var (
 				{
 					to:       common.Address{0x01},
 					value:    big.NewInt(1),
-					gasPrice: big.NewInt(1),
+					gasPrice: big.NewInt(params.InitialBaseFee),
 					data:     nil,
 				},
 				{
 					to:       common.Address{0x02},
 					value:    big.NewInt(2),
-					gasPrice: big.NewInt(2),
+					gasPrice: big.NewInt(params.InitialBaseFee),
 					data:     nil,
 				},
 			},
@@ -227,25 +227,33 @@ var (
 				{
 					to:       common.Address{0x01},
 					value:    big.NewInt(1),
-					gasPrice: big.NewInt(1),
+					gasPrice: big.NewInt(params.InitialBaseFee),
 					data:     nil,
 				},
 				{
 					to:       common.Address{0x02},
 					value:    big.NewInt(2),
-					gasPrice: big.NewInt(2),
+					gasPrice: big.NewInt(params.InitialBaseFee),
 					data:     nil,
 				},
 				{
 					to:       common.Address{0x03},
 					value:    big.NewInt(3),
-					gasPrice: big.NewInt(3),
+					gasPrice: big.NewInt(params.InitialBaseFee),
 					data:     nil,
 				},
 			},
 		},
 	}
 )
+
+var genesis = &core.Genesis{
+	Config:    params.AllEthashProtocolChanges,
+	Alloc:     core.GenesisAlloc{testAddr: {Balance: testBalance}},
+	ExtraData: []byte("test genesis"),
+	Timestamp: 9000,
+	BaseFee:   big.NewInt(params.InitialBaseFee),
+}
 
 type testTransactionParam struct {
 	to       common.Address
@@ -287,18 +295,11 @@ func newTestBackend(t *testing.T) (*node.Node, []*types.Block) {
 	return n, blocks
 }
 
-func generateTestChain() (*core.Genesis, []*types.Block) {
+func generateTestChain() []*types.Block {
 	signer := types.HomesteadSigner{}
 	// Create a database pre-initialize with a genesis block
 	db := rawdb.NewMemoryDatabase()
 	db.SetDiffStore(memorydb.New())
-	config := params.AllEthashProtocolChanges
-	genesis := &core.Genesis{
-		Config:    config,
-		Alloc:     core.GenesisAlloc{testAddr: {Balance: testBalance}},
-		ExtraData: []byte("test genesis"),
-		Timestamp: 9000,
-	}
 	genesis.MustCommit(db)
 	chain, _ := core.NewBlockChain(db, nil, params.TestChainConfig, ethash.NewFaker(), vm.Config{}, nil, nil, core.EnablePersistDiff(860000))
 	generate := func(i int, block *core.BlockGen) {
@@ -337,7 +338,7 @@ func generateTestChain() (*core.Genesis, []*types.Block) {
 	}
 	gblock := genesis.ToBlock(db)
 	engine := ethash.NewFaker()
-	blocks, _ := core.GenerateChain(config, gblock, engine, db, testBlockNum, generate)
+	blocks, _ := core.GenerateChain(genesis.Config, gblock, engine, db, testBlockNum, generate)
 	blocks = append([]*types.Block{gblock}, blocks...)
 	return blocks
 }
@@ -374,12 +375,8 @@ func TestEthClient(t *testing.T) {
 		},
 		"TestDiffAccounts": {
 			func(t *testing.T) { testDiffAccounts(t, client) },
-		"AtFunctions": {
-			func(t *testing.T) { testAtFunctions(t, client) },
 		},
-		"TransactionSender": {
-			func(t *testing.T) { testTransactionSender(t, client) },
-		},
+		// DO not have TestAtFunctions now, because we do not have pending block now
 	}
 
 	t.Parallel()
@@ -582,7 +579,7 @@ func testStatusFunctions(t *testing.T, client *rpc.Client) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if gasPrice.Cmp(big.NewInt(1000000000)) != 0 {
+	if gasPrice.Cmp(big.NewInt(1000000042)) != 0 {
 		t.Fatalf("unexpected gas price: %v", gasPrice)
 	}
 
@@ -591,7 +588,7 @@ func testStatusFunctions(t *testing.T, client *rpc.Client) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if gasTipCap.Cmp(big.NewInt(234375000)) != 0 {
+	if gasTipCap.Cmp(big.NewInt(1000000000)) != 0 {
 		t.Fatalf("unexpected gas tip cap: %v", gasTipCap)
 	}
 }

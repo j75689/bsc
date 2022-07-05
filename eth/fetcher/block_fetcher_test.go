@@ -762,7 +762,7 @@ func testInvalidNumberAnnouncement(t *testing.T, light bool) {
 	tester.fetcher.announceChangeHook = func(hash common.Hash, b bool) {
 		announced <- nil
 	}
-	tester.fetcher.Notify("bad", hashes[0], 2, time.Now().Add(-arriveTimeout), badHeaderFetcher, badBodyFetcher)
+	tester.fetcher.Notify("bad", hashes[0], 2, time.Now().Add(-arriveTimeout), badHeaderFetcher, badBodyFetcher, nil)
 	verifyAnnounce := func() {
 		for i := 0; i < 2; i++ {
 			select {
@@ -786,7 +786,7 @@ func testInvalidNumberAnnouncement(t *testing.T, light bool) {
 	goodHeaderFetcher := tester.makeHeaderFetcher("good", blocks, -gatherSlack)
 	goodBodyFetcher := tester.makeBodyFetcher("good", blocks, 0)
 	// Make sure a good announcement passes without a drop
-	tester.fetcher.Notify("good", hashes[0], 1, time.Now().Add(-arriveTimeout), goodHeaderFetcher, goodBodyFetcher)
+	tester.fetcher.Notify("good", hashes[0], 1, time.Now().Add(-arriveTimeout), goodHeaderFetcher, goodBodyFetcher, nil)
 	verifyAnnounce()
 	verifyImportEvent(t, imported, true)
 

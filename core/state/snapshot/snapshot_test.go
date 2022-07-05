@@ -27,6 +27,7 @@ import (
 	"github.com/VictoriaMetrics/fastcache"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
@@ -434,9 +435,15 @@ func TestSnaphots(t *testing.T) {
 func TestReadStateDuringFlattening(t *testing.T) {
 	// setAccount is a helper to construct a random account entry and assign it to
 	// an account slot in a snapshot
-	setAccount := func(accKey string) map[common.Hash][]byte {
-		return map[common.Hash][]byte{
-			common.HexToHash(accKey): randomAccount(),
+	testAccounts := []common.Address{
+		common.HexToAddress("0xa1"),
+		common.HexToAddress("0xa2"),
+		common.HexToAddress("0xa3"),
+	}
+
+	setAccount := func(accKey common.Address) map[common.Address][]byte {
+		return map[common.Address][]byte{
+			accKey: randomAccount(),
 		}
 	}
 	// Create a starting base layer and a snapshot tree out of it
@@ -451,9 +458,9 @@ func TestReadStateDuringFlattening(t *testing.T) {
 		},
 	}
 	// 4 layers in total, 3 diff layers and 1 disk layers
-	snaps.Update(common.HexToHash("0xa1"), common.HexToHash("0x01"), nil, setAccount("0xa1"), nil)
-	snaps.Update(common.HexToHash("0xa2"), common.HexToHash("0xa1"), nil, setAccount("0xa2"), nil)
-	snaps.Update(common.HexToHash("0xa3"), common.HexToHash("0xa2"), nil, setAccount("0xa3"), nil)
+	snaps.Update(common.HexToHash("0xa1"), common.HexToHash("0x01"), nil, setAccount(testAccounts[0]), nil, nil)
+	snaps.Update(common.HexToHash("0xa2"), common.HexToHash("0xa1"), nil, setAccount(testAccounts[1]), nil, nil)
+	snaps.Update(common.HexToHash("0xa3"), common.HexToHash("0xa2"), nil, setAccount(testAccounts[2]), nil, nil)
 
 	// Obtain the topmost snapshot handler for state accessing
 	snap := snaps.Snapshot(common.HexToHash("0xa3"))
@@ -464,7 +471,7 @@ func TestReadStateDuringFlattening(t *testing.T) {
 		// Spin up a thread to read the account from the pre-created
 		// snapshot handler. It's expected to be blocked.
 		go func() {
-			account, _ := snap.Account(common.HexToHash("0xa1"))
+			account, _ := snap.Account(crypto.Keccak256Hash(testAccounts[0][:]))
 			result <- account
 		}()
 		select {
@@ -473,6 +480,7 @@ func TestReadStateDuringFlattening(t *testing.T) {
 		case <-time.NewTimer(time.Millisecond * 300).C:
 		}
 	}
+
 	// Cap the snap tree, which will mark the bottom-most layer as stale.
 	snaps.Cap(common.HexToHash("0xa3"), 1)
 	select {

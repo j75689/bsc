@@ -82,6 +82,7 @@ var Defaults = Config{
 	TrieDirtyCache:          256,
 	TrieTimeout:             60 * time.Minute,
 	TriesInMemory:           128,
+	TriesVerifyMode:         core.LocalVerify,
 	SnapshotCache:           102,
 	DiffBlock:               uint64(86400),
 	Miner: miner.Config{
@@ -133,12 +134,15 @@ type Config struct {
 
 	// This can be set to list of enrtree:// URLs which will be queried for
 	// for nodes to connect to.
-	EthDiscoveryURLs  []string
-	SnapDiscoveryURLs []string
+	EthDiscoveryURLs   []string
+	SnapDiscoveryURLs  []string
+	TrustDiscoveryURLs []string
 
 	NoPruning           bool // Whether to disable pruning and flush everything to disk
 	DirectBroadcast     bool
 	DisableSnapProtocol bool //Whether disable snap protocol
+	DisableDiffProtocol bool //Whether disable diff protocol
+	EnableTrustProtocol bool //Whether enable trust protocol
 	DiffSync            bool // Whether support diff sync
 	PipeCommit          bool
 	RangeLimit          bool
@@ -170,6 +174,7 @@ type Config struct {
 	DatabaseDiff       string
 	PersistDiff        bool
 	DiffBlock          uint64
+	PruneAncientData   bool
 
 	TrieCleanCache          int
 	TrieCleanCacheJournal   string        `toml:",omitempty"` // Disk journal directory for trie cache to survive node restarts
@@ -178,6 +183,7 @@ type Config struct {
 	TrieTimeout             time.Duration
 	SnapshotCache           int
 	TriesInMemory           uint64
+	TriesVerifyMode         core.VerifyMode
 	Preimages               bool
 
 	// Mining options
@@ -214,6 +220,9 @@ type Config struct {
 	// CheckpointOracle is the configuration for checkpoint oracle.
 	CheckpointOracle *params.CheckpointOracleConfig `toml:",omitempty"`
 
+	// Berlin block override (TODO: remove after the fork)
+	OverrideBerlin *big.Int `toml:",omitempty"`
+
 	// Arrow Glacier block override (TODO: remove after the fork)
 	OverrideArrowGlacier *big.Int `toml:",omitempty"`
 
@@ -223,12 +232,13 @@ type Config struct {
 
 // CreateConsensusEngine creates a consensus engine for the given chain configuration.
 func CreateConsensusEngine(stack *node.Node, chainConfig *params.ChainConfig, config *ethash.Config, notify []string, noverify bool, db ethdb.Database, ee *ethapi.PublicBlockChainAPI, genesisHash common.Hash) consensus.Engine {
+	if chainConfig.Parlia != nil {
+		return parlia.New(chainConfig, db, ee, genesisHash)
+	}
 	// If proof-of-authority is requested, set it up
 	var engine consensus.Engine
 	if chainConfig.Clique != nil {
 		engine = clique.New(chainConfig.Clique, db)
-	} else if chainConfig.Parlia != nil {
-		engine = parlia.New(chainConfig, db, ee, genesisHash)
 	} else {
 		switch config.PowMode {
 		case ethash.ModeFake:

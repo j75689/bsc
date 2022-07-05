@@ -537,8 +537,8 @@ func TestTransactionPendingReannounce(t *testing.T) {
 	defer sourcePipe.Close()
 	defer sinkPipe.Close()
 
-	sourcePeer := eth.NewPeer(eth.ETH65, p2p.NewPeer(enode.ID{0}, "", nil), sourcePipe, source.txpool)
-	sinkPeer := eth.NewPeer(eth.ETH65, p2p.NewPeer(enode.ID{0}, "", nil), sinkPipe, sink.txpool)
+	sourcePeer := eth.NewPeer(eth.ETH66, p2p.NewPeer(enode.ID{0}, "", nil), sourcePipe, source.txpool)
+	sinkPeer := eth.NewPeer(eth.ETH66, p2p.NewPeer(enode.ID{0}, "", nil), sinkPipe, sink.txpool)
 	defer sourcePeer.Close()
 	defer sinkPeer.Close()
 
@@ -656,7 +656,7 @@ func testCheckpointChallenge(t *testing.T, syncmode downloader.SyncMode, checkpo
 		})
 	}()
 
-	// Run the handshake locally to avoid spinning up a remote handler.
+	// Run the handshake locally to avoid spinning up a remote handler
 	var (
 		genesis = handler.chain.Genesis()
 		head    = handler.chain.CurrentBlock()

@@ -2427,7 +2427,7 @@ func TestTransactionPendingReannouce(t *testing.T) {
 
 	// Create the pool to test the limit enforcement with
 	statedb, _ := state.New(common.Hash{}, state.NewDatabase(rawdb.NewMemoryDatabase()), nil)
-	blockchain := &testBlockChain{statedb, 1000000, new(event.Feed)}
+	blockchain := &testBlockChain{1000000, statedb, new(event.Feed)}
 
 	config := testTxPoolConfig
 	// This ReannounceTime will be modified to time.Minute when creating tx_pool.

@@ -50,7 +50,7 @@ func InitDatabaseFromFreezer(db ethdb.Database) {
 		// We read 100K hashes at a time, for a total of 3.2M
 		count := uint64(100_000)
 		if i+count > frozen+offset {
-			count = frozen+offset - i
+			count = frozen + offset - i
 		}
 		data, err := db.AncientRange(freezerHashTable, i, count, 32*count)
 		if err != nil {
@@ -100,7 +100,10 @@ func iterateTransactions(db ethdb.Database, from uint64, to uint64, reverse bool
 		number uint64
 		rlp    rlp.RawValue
 	}
-	if to == from {
+	if offset := db.AncientOffSet(); offset > from {
+		from = offset
+	}
+	if to <= from {
 		return nil
 	}
 	threads := to - from
@@ -183,6 +186,9 @@ func iterateTransactions(db ethdb.Database, from uint64, to uint64, reverse bool
 // signal received.
 func indexTransactions(db ethdb.Database, from uint64, to uint64, interrupt chan struct{}, hook func(uint64) bool) {
 	// short circuit for invalid range
+	if offset := db.AncientOffSet(); offset > from {
+		from = offset
+	}
 	if from >= to {
 		return
 	}
@@ -275,6 +281,9 @@ func indexTransactionsForTesting(db ethdb.Database, from uint64, to uint64, inte
 // signal received.
 func unindexTransactions(db ethdb.Database, from uint64, to uint64, interrupt chan struct{}, hook func(uint64) bool) {
 	// short circuit for invalid range
+	if offset := db.AncientOffSet(); offset > from {
+		from = offset
+	}
 	if from >= to {
 		return
 	}
