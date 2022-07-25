@@ -197,6 +197,9 @@ func newStateDB(root common.Hash, db Database, snaps *snapshot.Tree) (*StateDB, 
 	}
 	_, sdb.noTrie = tr.(*trie.EmptyTrie)
 	sdb.trie = tr
+	if sdb.noTrie && sdb.snap == nil {
+		return nil, snapshot.ErrSnapshotMissing
+	}
 	return sdb, nil
 }
 

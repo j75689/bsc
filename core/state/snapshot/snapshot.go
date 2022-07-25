@@ -82,6 +82,8 @@ var (
 	// to not maintain the layer's original state.
 	ErrSnapshotStale = errors.New("snapshot stale")
 
+	ErrSnapshotMissing = errors.New("snapshot missing")
+
 	// ErrNotCoveredYet is returned from data accessors if the underlying snapshot
 	// is being generated currently and the requested data item is not yet in the
 	// range of accounts covered.
