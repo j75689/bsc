@@ -3042,7 +3042,7 @@ func CalculateDiffHash(d *types.DiffLayer) (common.Hash, error) {
 	for index, account := range diff.Accounts {
 		full, err := snapshot.FullAccount(account.Blob)
 		if err != nil {
-			return common.Hash{}, fmt.Errorf("decode full account error: %v", err)
+			return common.Hash{}, fmt.Errorf("decode full account error: %v, accountBlob: %v", err, account.Blob)
 		}
 		// set account root to empty root
 		diff.Accounts[index].Blob = snapshot.SlimAccountRLP(full.Nonce, full.Balance, common.Hash{}, full.CodeHash)
