@@ -2988,6 +2988,7 @@ func (bc *BlockChain) GetVerifyResult(blockNumber uint64, blockHash common.Hash,
 			hash, err := CalculateDiffHash(diff)
 			if err != nil {
 				res.Status = types.StatusUnexpectedError
+				log.Error("calculate diffhash failed", "err", err)
 				return &res
 			}
 
