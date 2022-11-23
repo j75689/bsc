@@ -173,6 +173,7 @@ var (
 		utils.BlockAmountReserved,
 		utils.CheckSnapshotWithMPT,
 		utils.EnableDoubleSignMonitorFlag,
+		utils.NotifySlackDoubleSignMonitorURL,
 	}
 
 	rpcFlags = []cli.Flag{

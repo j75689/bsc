@@ -3006,9 +3006,11 @@ func EnableBlockValidator(chainConfig *params.ChainConfig, engine consensus.Engi
 	}
 }
 
-func EnableDoubleSignChecker(bc *BlockChain) (*BlockChain, error) {
-	bc.doubleSignMonitor = monitor.NewDoubleSignMonitor(bc.engine.ExtraSeal(), bc.engine.SealHash)
-	return bc, nil
+func EnableDoubleSignChecker(notifyURL string) BlockChainOption {
+	return func(bc *BlockChain) (*BlockChain, error) {
+		bc.doubleSignMonitor = monitor.NewDoubleSignMonitor(bc.engine.ExtraSeal(), bc.engine.SealHash, notifyURL)
+		return bc, nil
+	}
 }
 
 func (bc *BlockChain) GetVerifyResult(blockNumber uint64, blockHash common.Hash, diffHash common.Hash) *VerifyResult {

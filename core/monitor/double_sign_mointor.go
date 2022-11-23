@@ -2,7 +2,10 @@ package monitor
 
 import (
 	"bytes"
+	"encoding/hex"
 	"errors"
+	"fmt"
+	"net/http"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/prque"
@@ -19,6 +22,7 @@ const (
 func NewDoubleSignMonitor(
 	extraSeal int,
 	sealHash func(header *types.Header) (hash common.Hash),
+	notifyURL string,
 ) *DoubleSignMonitor {
 	return &DoubleSignMonitor{
 		sealHash:      sealHash,
@@ -26,6 +30,7 @@ func NewDoubleSignMonitor(
 		headerNumbers: prque.New(nil),
 		headers:       make(map[uint64]*types.Header, MaxCacheHeader),
 		quit:          make(chan struct{}),
+		notifyURL:     notifyURL,
 	}
 }
 
@@ -35,6 +40,8 @@ type DoubleSignMonitor struct {
 	headerNumbers *prque.Prque
 	headers       map[uint64]*types.Header
 	quit          chan struct{}
+
+	notifyURL string
 }
 
 func (m *DoubleSignMonitor) getSignature(h *types.Header) ([]byte, error) {
@@ -123,6 +130,18 @@ func (m *DoubleSignMonitor) checkHeader(h *types.Header) (bool, *types.Header, [
 	return false, nil, s1, s2, nil
 }
 
+func (m *DoubleSignMonitor) notify(content string) error {
+	if m.notifyURL == "" {
+		return nil
+	}
+	body := fmt.Sprintf(`{"content": "%s"}`, content)
+	_, err := http.Post(m.notifyURL, "application/json", bytes.NewReader([]byte(body)))
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (m *DoubleSignMonitor) Start(ch <-chan *types.Header) {
 	for {
 		select {
@@ -137,6 +156,12 @@ func (m *DoubleSignMonitor) Start(ch <-chan *types.Header) {
 				log.Error("found a double sign header", "number", h.Number.Uint64(),
 					"first_hash", h.Hash(), "first_miner", h.Coinbase, "first_signature", s1,
 					"second_hash", h2.Hash(), "second_miner", h2.Coinbase, "second_signature", s2)
+				err = m.notify(fmt.Sprintf("Alert: found double sign evidence: height %d, first miner %s, signature %s; second miner %s, signature %s",
+					h.Number.Int64(), h.Coinbase.String(), hex.EncodeToString(s1), h2.Coinbase.String(), hex.EncodeToString(s2)))
+
+				if err != nil {
+					log.Error("send double sign notification to slack error", "err", err)
+				}
 			}
 		case <-m.quit:
 			return

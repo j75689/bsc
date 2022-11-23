@@ -905,6 +905,10 @@ var (
 		Name:  "monitor.doublesign",
 		Usage: "Enable double sign monitor to check whether any validator signs multiple blocks",
 	}
+	NotifySlackDoubleSignMonitorURL = cli.StringFlag{
+		Name:  "monitor.doublesign.url",
+		Usage: "The URL to send slack notifications of double sign event",
+	}
 )
 
 // MakeDataDir retrieves the currently requested data directory, terminating
@@ -1176,6 +1180,7 @@ func setLes(ctx *cli.Context, cfg *ethconfig.Config) {
 func setMonitor(ctx *cli.Context, cfg *node.Config) {
 	if ctx.GlobalBool(EnableDoubleSignMonitorFlag.Name) {
 		cfg.EnableDoubleSignMonitor = true
+		cfg.NotifySlackDoubleSignMonitorURL = ctx.GlobalString(NotifySlackDoubleSignMonitorURL.Name)
 	}
 }
 

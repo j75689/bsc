@@ -222,7 +222,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		bcOps = append(bcOps, core.EnablePersistDiff(config.DiffBlock))
 	}
 	if stack.Config().EnableDoubleSignMonitor {
-		bcOps = append(bcOps, core.EnableDoubleSignChecker)
+		bcOps = append(bcOps, core.EnableDoubleSignChecker(stack.Config().NotifySlackDoubleSignMonitorURL))
 	}
 
 	peers := newPeerSet()
