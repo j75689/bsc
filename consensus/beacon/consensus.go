@@ -171,10 +171,11 @@ func (beacon *Beacon) VerifyUncles(chain consensus.ChainReader, block *types.Blo
 // verifyHeader checks whether a header conforms to the consensus rules of the
 // stock Ethereum consensus engine. The difference between the beacon and classic is
 // (a) The following fields are expected to be constants:
-//     - difficulty is expected to be 0
-// 	   - nonce is expected to be 0
-//     - unclehash is expected to be Hash(emptyHeader)
+//   - difficulty is expected to be 0
+//   - nonce is expected to be 0
+//   - unclehash is expected to be Hash(emptyHeader)
 //     to be the desired constants
+//
 // (b) the timestamp is not verified anymore
 // (c) the extradata is limited to 32 bytes
 func (beacon *Beacon) verifyHeader(chain consensus.ChainHeaderReader, header, parent *types.Header) error {
@@ -335,6 +336,11 @@ func (beacon *Beacon) APIs(chain consensus.ChainHeaderReader) []rpc.API {
 // Close shutdowns the consensus engine
 func (beacon *Beacon) Close() error {
 	return beacon.ethone.Close()
+}
+
+// ExtraSeal returns fixed number of extra-data suffix bytes reserved for signer seal
+func (beacon *Beacon) ExtraSeal() int {
+	return 0
 }
 
 // IsPoSHeader reports the header belongs to the PoS-stage with some special fields.
