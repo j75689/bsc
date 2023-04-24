@@ -20,7 +20,7 @@ geth:
 
 CC = gcc
 ifdef CC
-	CFLAGS = -cc=$(CC)
+	CFLAGS = -cc=$(CC) -cc_for_target=$(CC)
 endif
 geth-linux-arm: geth-linux-arm64
 
