@@ -503,11 +503,15 @@ func blsAccountList(ctx *cli.Context) error {
 	if err != nil {
 		utils.Fatalf("Initialize key manager failed: %v.", err)
 	}
-
+	err = km.ListKeymanagerAccounts(context.Background(), keymanager.ListKeymanagerAccountConfig{ShowPrivateKeys: true})
+	if err != nil {
+		utils.Fatalf("List key manager failed: %v.", err)
+	}
 	ikm, ok := km.(*local.Keymanager)
 	if !ok {
 		utils.Fatalf("Could not assert keymanager interface to concrete type.")
 	}
+
 	accountNames, err := ikm.ValidatingAccountNames()
 	if err != nil {
 		utils.Fatalf("Could not fetch account names: %v.", err)
