@@ -235,7 +235,7 @@ var (
 		CancunTime:          _rialto_upgrade_height_,
 		HaberTime:           _rialto_upgrade_height_,
 		HaberFixTime:        _rialto_upgrade_height_,
-		BohrTime:            newUint64(0),
+		BohrTime:            nil,
 
 		Parlia: &ParliaConfig{
 			Period: _rialto_parlia_period_,
