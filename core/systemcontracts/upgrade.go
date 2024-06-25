@@ -719,6 +719,22 @@ func init() {
 			},
 		},
 	}
+
+	haberFixUpgrade[rialtoNet] = &Upgrade{
+		UpgradeName: "haberFix",
+		Configs: []*UpgradeConfig{
+			{
+				ContractAddr: common.HexToAddress(ValidatorContract),
+				CommitUrl:    "https://github.com/bnb-chain/bsc-genesis-contract/commit/2d6372ddba77902ef01e45887a425938376d5a5c",
+				Code:         haberFix.RialtoValidatorContract,
+			},
+			{
+				ContractAddr: common.HexToAddress(SlashContract),
+				CommitUrl:    "https://github.com/bnb-chain/bsc-genesis-contract/commit/2d6372ddba77902ef01e45887a425938376d5a5c",
+				Code:         haberFix.RialtoSlashContract,
+			},
+		},
+	}
 }
 
 func UpgradeBuildInSystemContract(config *params.ChainConfig, blockNumber *big.Int, lastBlockTime uint64, blockTime uint64, statedb *state.StateDB) {

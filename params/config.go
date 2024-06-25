@@ -230,15 +230,16 @@ var (
 		HertzfixBlock:       big.NewInt(8),
 		ShanghaiTime:        newUint64(0),
 		KeplerTime:          newUint64(0),
-		FeynmanTime:         newUint64(0),
-		FeynmanFixTime:      newUint64(0),
-		CancunTime:          newUint64(0),
-		HaberTime:           newUint64(0),
+		FeynmanTime:         newUint64(1719249258), // TODO: need to be rendered by scripts
+		FeynmanFixTime:      newUint64(1719249258),
+		CancunTime:          _rialto_upgrade_height_,
+		HaberTime:           _rialto_upgrade_height_,
+		HaberFixTime:        _rialto_upgrade_height_,
 		BohrTime:            newUint64(0),
 
 		Parlia: &ParliaConfig{
-			Period: 3,
-			Epoch:  200,
+			Period: _rialto_parlia_period_,
+			Epoch:  _rialto_parlia_epoch_,
 		},
 	}
 
