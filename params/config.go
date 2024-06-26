@@ -230,8 +230,8 @@ var (
 		HertzfixBlock:       big.NewInt(8),
 		ShanghaiTime:        newUint64(0),
 		KeplerTime:          newUint64(0),
-		FeynmanTime:         newUint64(1719249258), // TODO: need to be rendered by scripts
-		FeynmanFixTime:      newUint64(1719249258),
+		FeynmanTime:         newUint64(1719375237), // TODO: need to be rendered by scripts
+		FeynmanFixTime:      newUint64(1719375237),
 		CancunTime:          _rialto_upgrade_height_,
 		HaberTime:           _rialto_upgrade_height_,
 		HaberFixTime:        _rialto_upgrade_height_,
