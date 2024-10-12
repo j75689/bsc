@@ -200,7 +200,7 @@ var (
 		HaberFixTime:        newUint64(1719986788), // 2024-07-03 06:06:28 AM UTC
 		BohrTime:            newUint64(1724116996), // 2024-08-20 01:23:16 AM UTC
 		// TODO
-		PascalTime: nil,
+		PascalTime: __PascalTime__,
 		PragueTime: nil,
 
 		Parlia: &ParliaConfig{
