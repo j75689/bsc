@@ -18,15 +18,18 @@
 package state
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state/snapshot"
 	"github.com/ethereum/go-ethereum/core/stateless"
@@ -1496,6 +1499,22 @@ func (s *StateDB) Commit(block uint64, deleteEmptyObjects bool) (common.Hash, *t
 	ret, err := s.commitAndFlush(block, deleteEmptyObjects)
 	if err != nil {
 		return common.Hash{}, nil, err
+	}
+	if block == 20415 {
+		fmt.Println("commit", block, s.originalRoot, ret.root)
+		for hashedAddress, accountRlp := range ret.accounts {
+			account, err := types.FullAccount(accountRlp)
+			if err != nil {
+				fmt.Println("FullAccount err", err)
+			}
+			fmt.Printf(`{"timestamp":"2024-12-31T03:06:43.215750Z","level":"DEBUG","fields":{"message":"hashed address: %s, account_info: TrieAccount {\n    nonce: %d,\n    balance: %s,\n    storage_root: %s,\n    code_hash: %s,\n}, account_rlp: \"%s\""},"target":"trie::state_root","span":{"stage":"MerkleUnwind","name":"Unwinding"},"spans":[{"name":"ChainOrchestrator::poll"},{"stage":"MerkleUnwind","name":"Unwinding"}]}`,
+				strings.TrimPrefix(strings.ToLower(hashedAddress.String()), "0x"),
+				account.Nonce, account.Balance.String(),
+				account.Root.String(), hexutil.Encode(account.CodeHash), hex.EncodeToString(accountRlp))
+			// trie::state_root: hashed address: f5e42c9919d6f29d8c09434f79d0877afac7d921fc630d2fb3626a88c9ed01ba, account_info: TrieAccount {nonce: 3,balance: 1499861325000000000,storage_root: 0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421,code_hash: 0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470,}, account_rlp: "f84c038814d093edb0f8c200a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a0c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"
+		}
+
+		panic("dylan debuging")
 	}
 	return ret.root, ret.diffLayer, nil
 }
