@@ -83,9 +83,10 @@ type MevConfig struct {
 	ValidatorCommission   uint64          // 100 means the validator claims 1% from block reward
 	BidSimulationLeftOver time.Duration
 
-	BuilderEnabled bool              // Whether to enable bidder or not
-	Validators     []ValidatorConfig // The list of validators
-	BuilderAccount common.Address    // The account of the bidder
+	BuilderEnabled      bool              // Whether to enable bidder or not
+	Validators          []ValidatorConfig // The list of validators
+	BuilderAccount      common.Address    // The account of the bidder
+	NoInterruptLeftOver time.Duration
 }
 
 var DefaultMevConfig = MevConfig{
@@ -98,4 +99,5 @@ var DefaultMevConfig = MevConfig{
 	BuilderEnabled:        false,
 	Validators:            nil,
 	BuilderAccount:        common.Address{},
+	NoInterruptLeftOver:   400 * time.Millisecond,
 }
