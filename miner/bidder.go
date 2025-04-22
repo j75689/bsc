@@ -332,6 +332,8 @@ func (b *Bidder) deleteBestWork(work *environment) {
 	b.bestWorksMu.Lock()
 	defer b.bestWorksMu.Unlock()
 
+	// release the memory of the work
+	work.discard()
 	delete(b.bestWorks, work.header.Number.Int64())
 }
 
