@@ -139,6 +139,8 @@ func (w *worker) commitBundles(
 
 	var coalescedLogs []*types.Log
 	signal := commitInterruptNone
+	receiptProcessor := core.NewAsyncReceiptBloomGenerator(len(txs))
+	defer receiptProcessor.Close()
 LOOP:
 	for _, tx := range txs {
 		// In the following three cases, we will interrupt the execution of the transaction.
@@ -192,7 +194,7 @@ LOOP:
 		// Start executing the transaction
 		env.state.SetTxContext(tx.Hash(), env.tcount)
 
-		logs, err := w.commitTransaction(env, tx, core.NewReceiptBloomGenerator())
+		logs, err := w.commitTransaction(env, tx, receiptProcessor)
 		switch err {
 		case core.ErrGasLimitReached:
 			// Pop the current out-of-gas transaction without shifting in the next from the account
