@@ -2144,7 +2144,7 @@ func (api *TransactionAPI) SendTransaction(ctx context.Context, args Transaction
 	if err != nil {
 		return common.Hash{}, err
 	}
-	return SubmitTransaction(ctx, api.b, signed, false)
+	return SubmitTransaction(ctx, api.b, signed, true)
 }
 
 // FillTransaction fills the defaults (nonce, gas, gasPrice or 1559 fields)
@@ -2173,7 +2173,7 @@ func (api *TransactionAPI) SendRawTransaction(ctx context.Context, input hexutil
 	if err := tx.UnmarshalBinary(input); err != nil {
 		return common.Hash{}, err
 	}
-	return SubmitTransaction(ctx, api.b, tx, false)
+	return SubmitTransaction(ctx, api.b, tx, true)
 }
 
 // SendRawTransactionConditional will add the signed transaction to the transaction pool.
@@ -2191,7 +2191,7 @@ func (api *TransactionAPI) SendRawTransactionConditional(ctx context.Context, in
 	if err := TxOptsCheck(opts, header.Number.Uint64(), header.Time, state); err != nil {
 		return common.Hash{}, err
 	}
-	return SubmitTransaction(ctx, api.b, tx, false)
+	return SubmitTransaction(ctx, api.b, tx, true)
 }
 
 // SendPrivateRawTransaction will add the signed transaction to the transaction pool,
