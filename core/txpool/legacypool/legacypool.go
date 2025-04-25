@@ -84,7 +84,7 @@ var (
 	evictionInterval         = time.Minute     // Time interval to check for evictable transactions
 	statsReportInterval      = 8 * time.Second // Time interval to report transaction pool stats
 	reannounceInterval       = time.Minute     // Time interval to check for reannounce transactions
-	privateTxCleanupInterval = 1 * time.Hour
+	privateTxCleanupInterval = 1 * time.Hour   // Time interval to check for expired private transactions
 )
 
 var (
@@ -310,7 +310,7 @@ func New(config Config, chain BlockChain) *LegacyPool {
 		reorgShutdownCh: make(chan struct{}),
 		initDoneCh:      make(chan struct{}),
 		localBufferPool: NewTxOverflowPoolHeap(config.OverflowPoolSlots),
-		privateTxs:      types.NewExpiringTxHashSet(config.PrivateTxLifetime),
+		privateTxs:      types.NewExpiringTxHashSet(config.PrivateTxLifetime, metrics.NewRegisteredGauge("txpool/private", nil)),
 	}
 	pool.priced = newPricedList(pool.all)
 

@@ -28,6 +28,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
@@ -671,12 +672,14 @@ type TimestampedTxHashSet struct {
 	lock       sync.RWMutex
 	timestamps map[common.Hash]time.Time
 	ttl        time.Duration
+	metrics    *metrics.Gauge
 }
 
-func NewExpiringTxHashSet(ttl time.Duration) *TimestampedTxHashSet {
+func NewExpiringTxHashSet(ttl time.Duration, metrics *metrics.Gauge) *TimestampedTxHashSet {
 	s := &TimestampedTxHashSet{
 		timestamps: make(map[common.Hash]time.Time),
 		ttl:        ttl,
+		metrics:    metrics,
 	}
 
 	return s
@@ -689,6 +692,7 @@ func (s *TimestampedTxHashSet) Add(hash common.Hash) {
 	_, ok := s.timestamps[hash]
 	if !ok {
 		s.timestamps[hash] = time.Now().Add(s.ttl)
+		s.metrics.Inc(1)
 	}
 }
 
@@ -706,6 +710,7 @@ func (s *TimestampedTxHashSet) Remove(hash common.Hash) {
 	_, ok := s.timestamps[hash]
 	if ok {
 		delete(s.timestamps, hash)
+		s.metrics.Dec(1)
 	}
 }
 
@@ -719,4 +724,5 @@ func (s *TimestampedTxHashSet) Prune() {
 			delete(s.timestamps, hash)
 		}
 	}
+	s.metrics.Update(int64(len(s.timestamps)))
 }

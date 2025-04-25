@@ -346,7 +346,7 @@ func New(config Config, chain BlockChain) *BlobPool {
 		index:          make(map[common.Address][]*blobTxMeta),
 		spent:          make(map[common.Address]*uint256.Int),
 		txValidationFn: txpool.ValidateTransaction,
-		privateTxs:     types.NewExpiringTxHashSet(config.PrivateTxLifetime),
+		privateTxs:     types.NewExpiringTxHashSet(config.PrivateTxLifetime, metrics.NewRegisteredGauge("blobpool/private", nil)),
 	}
 }
 
